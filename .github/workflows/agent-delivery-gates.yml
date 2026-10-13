@@ -1,0 +1,77 @@
+# Runs the same checks as .githooks/pre-commit on every push to main and on
+# every pull request.
+
+name: delivery gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The prose scan reads tracked files and the test diff check reads
+          # history. A shallow clone hides both.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm ci
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "gofmt -l lists files that are not formatted:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: tests
+        run: npm test
+
+      - name: prose scan
+        run: npx --no-install agent-delivery-gates scan-prose --require-rules
+
+      - name: tally check
+        run: npx --no-install agent-delivery-gates tally --check
+
+  test-diff:
+    # Reports test changes apart from source changes for a pull request.
+    # Exits 1 when it finds a weakening signal.
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm ci
+
+      - name: report the test diff apart from the source diff
+        # shell: bash adds pipefail, so tee does not hide the exit code.
+        shell: bash
+        run: |
+          npx --no-install agent-delivery-gates test-diff \
+            --range "${{ github.event.pull_request.base.sha }}..${{ github.sha }}" \
+            | tee "$GITHUB_STEP_SUMMARY"

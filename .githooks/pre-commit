@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+# Pre-commit hook installed by `agent-delivery-gates init`.
+#
+# Not run automatically until enabled with:
+#
+#   git config core.hooksPath .githooks
+#
+# Runs whatever of these six checks the project has set up: the
+# typecheck, go vet, gofmt, the test suite, the prose scan, and the gate
+# tally check. A check with nothing to run against is skipped and does not
+# block the commit, but a skip is never reported as a pass: each one is
+# printed, the closing line lists every check that did not run, and a skipped
+# test step in a repository that has tests prints a banner saying the tests
+# did not run.
+#
+# Set ADG_SKIP_PRECOMMIT=1 to skip this hook for one commit. The skip is
+# never quiet.
+set -euo pipefail
+
+# The gates run through the locally installed package. A gate that cannot run
+# is not a gate that passed, so a missing package stops the commit and says
+# how to fix it.
+if ! npx --no-install agent-delivery-gates --version >/dev/null 2>&1; then
+  echo "pre-commit: agent-delivery-gates could not be found in this project." >&2
+  echo "pre-commit: install it first:  npm install --save-dev agent-delivery-gates" >&2
+  echo "pre-commit: no checks ran, so this commit is stopped." >&2
+  exit 1
+fi
+
+if [ -n "${ADG_SKIP_PRECOMMIT:-}" ]; then
+  echo "=============================================================="
+  echo " pre-commit: SKIPPED because ADG_SKIP_PRECOMMIT is set."
+  echo " None of the checks below ran for this commit. Unset"
+  echo " ADG_SKIP_PRECOMMIT to run them again next time."
+  echo "=============================================================="
+  exit 0
+fi
+
+# Strip every GIT_* override before running git: a leftover GIT_DIR or
+# GIT_WORK_TREE would point git at a different tree than the one being
+# committed.
+# compgen -v lists variable NAMES and never reads a value, so a value
+# holding a newline cannot break the parse. It is a bash builtin present in
+# bash 3.2, which is what macOS ships, and needs no GNU env.
+for name in $(compgen -v GIT_); do unset "$name"; done
+
+if ! ROOT=$(git rev-parse --show-toplevel 2>&1); then
+  echo "pre-commit: not a git repository. git said: $ROOT" >&2
+  exit 2
+fi
+cd "$ROOT"
+
+# Output is held back and printed only when a step fails, so a good commit
+# stays short and a hook that stays quiet is one people keep running.
+LOG=$(mktemp)
+trap 'rm -f "$LOG"' EXIT
+
+fail_step() {
+  echo "==============================================================" >&2
+  echo " pre-commit: FAILED at: $1" >&2
+  echo " Run it alone with:" >&2
+  echo "   $2" >&2
+  echo "==============================================================" >&2
+  cat "$LOG" >&2
+  exit 1
+}
+
+run_step() {
+  local label=$1 command=$2
+  shift 2
+  printf 'pre-commit: %s\n' "$label"
+  if ! "$@" >"$LOG" 2>&1; then
+    fail_step "$label" "$command"
+  fi
+}
+
+SKIPPED=""
+RAN=0
+
+skip_step() {
+  printf 'pre-commit: %s -- NOT RUN (%s)\n' "$1" "$2"
+  SKIPPED="${SKIPPED:+$SKIPPED, }$1"
+}
+
+# Sorts what the repository tracks into two kinds of evidence. Test files
+# (a test naming convention, a tests/ directory) show that tests exist. A
+# project file (go.mod, Cargo.toml, pom.xml) shows only the kind of project
+# and says nothing about whether it has tests. This only looks at file names:
+# it cannot know how to run anything. Sets TEST_EVIDENCE, PROJECT_KIND (for
+# example "Go (go.mod)") and EXAMPLE_CMD (a test command for that kind).
+classify_repo() {
+  local files n
+  TEST_EVIDENCE="" PROJECT_KIND="" EXAMPLE_CMD=""
+  files=$(git ls-files 2>/dev/null || true)
+  count() { printf '%s\n' "$files" | grep -Ec "$1" || true; }
+  add_test() { TEST_EVIDENCE="${TEST_EVIDENCE:+$TEST_EVIDENCE, }$1"; }
+  add_kind() {
+    PROJECT_KIND="${PROJECT_KIND:+$PROJECT_KIND, }$1"
+    if [ -z "$EXAMPLE_CMD" ]; then EXAMPLE_CMD=$2; fi
+  }
+  n=$(count '_test\.go$')
+  if [ "$n" -gt 0 ]; then add_test "$n *_test.go files"; fi
+  n=$(count '(^|/)test_[^/]*\.py$|_test\.py$')
+  if [ "$n" -gt 0 ]; then add_test "$n Python test files"; fi
+  n=$(count '\.(test|spec)\.[cm]?[jt]sx?$')
+  if [ "$n" -gt 0 ]; then add_test "$n *.test/*.spec script files"; fi
+  n=$(count '(^|/)(tests?|__tests__)/')
+  if [ "$n" -gt 0 ]; then add_test "$n files under a tests/ directory"; fi
+  if [ "$(count '(^|/)go\.mod$')" -gt 0 ]; then add_kind "Go (go.mod)" "go test ./..."; fi
+  if [ "$(count '(^|/)Cargo\.toml$')" -gt 0 ]; then add_kind "Rust (Cargo.toml)" "cargo test"; fi
+  if [ "$(count '(^|/)pytest\.ini$')" -gt 0 ]; then add_kind "Python (pytest.ini)" "pytest"; fi
+  if [ "$(count '(^|/)pom\.xml$')" -gt 0 ]; then add_kind "Java (pom.xml)" "mvn test"; fi
+}
+
+tests_not_run() {
+  skip_step "tests" "no test command is configured"
+  classify_repo
+  if [ -n "$TEST_EVIDENCE" ]; then
+    {
+      echo "=============================================================="
+      echo " pre-commit: THE TESTS DID NOT RUN"
+      echo " This repository has tests ($TEST_EVIDENCE)"
+      echo " but no test command is configured (no \"test\" script in"
+      echo " package.json), so this hook ran none"
+      echo " of them. Nothing below says they pass. Run them yourself, and"
+      if [ -n "$EXAMPLE_CMD" ]; then
+        echo " add a \"test\" script to package.json (for example"
+        echo " \"test\": \"$EXAMPLE_CMD\") so this hook can run them."
+      else
+        echo " add a \"test\" script to package.json so this hook can run them."
+      fi
+      echo "=============================================================="
+    } >&2
+  elif [ -n "$PROJECT_KIND" ]; then
+    {
+      echo "=============================================================="
+      echo " pre-commit: NO TESTS RAN"
+      echo " This looks like a $PROJECT_KIND project. No test files were"
+      echo " found, and this hook cannot run its tests: no \"test\" script"
+      echo " in package.json. Once there are tests, add one (for example"
+      echo " \"test\": \"$EXAMPLE_CMD\")."
+      echo "=============================================================="
+    } >&2
+  fi
+}
+
+if [ -f "$ROOT/tsconfig.json" ]; then
+  run_step "typecheck" "npx tsc --noEmit" npx tsc --noEmit
+  RAN=$((RAN + 1))
+else
+  skip_step "typecheck" "no tsconfig.json found"
+fi
+
+# Go checks. If go is not on PATH, fall back to the standard install
+# location /usr/local/go/bin when it exists; otherwise the step fails and
+# says go was not found.
+if [ -f "$ROOT/go.mod" ]; then
+  if ! command -v go >/dev/null 2>&1 && [ -x /usr/local/go/bin/go ]; then
+    PATH="/usr/local/go/bin:$PATH"
+  fi
+  run_step "go vet" "go vet ./..." go vet ./...
+  RAN=$((RAN + 1))
+  gofmt_clean() {
+    local out
+    out=$(gofmt -l . 2>&1) || { printf '%s\n' "$out"; return 1; }
+    if [ -n "$out" ]; then
+      printf 'gofmt -l lists files that are not formatted:\n%s\n' "$out"
+      return 1
+    fi
+  }
+  run_step "gofmt" "gofmt -l ." gofmt_clean
+  RAN=$((RAN + 1))
+else
+  skip_step "go vet" "no go.mod found"
+  skip_step "gofmt" "no go.mod found"
+fi
+
+has_test_script=0
+if [ -f "$ROOT/package.json" ]; then
+  if node -e '
+    const pkg = require(process.argv[1]);
+    const test = pkg && pkg.scripts && pkg.scripts.test;
+    process.exit(test && !/no test specified/.test(test) ? 0 : 1);
+  ' "$ROOT/package.json" 2>/dev/null; then
+    has_test_script=1
+  fi
+fi
+if [ "$has_test_script" -eq 1 ]; then
+  run_step "tests" "npm test" npm test
+  RAN=$((RAN + 1))
+else
+  tests_not_run
+fi
+
+if [ -f "$ROOT/.adg/prose-rules.txt" ]; then
+  if [ -f "$ROOT/.adg/prose-baseline.txt" ]; then
+    run_step "prose scan" \
+      "npx --no-install agent-delivery-gates scan-prose --require-rules --baseline .adg/prose-baseline.txt" \
+      npx --no-install agent-delivery-gates scan-prose --require-rules --baseline .adg/prose-baseline.txt
+  else
+    run_step "prose scan" "npx --no-install agent-delivery-gates scan-prose --require-rules" \
+      npx --no-install agent-delivery-gates scan-prose --require-rules
+  fi
+  RAN=$((RAN + 1))
+else
+  skip_step "prose scan" "no .adg/prose-rules.txt; run init --prose-preset to turn this on"
+fi
+
+if [ -f "$ROOT/docs/gate-tally.md" ]; then
+  run_step "tally check" "npx --no-install agent-delivery-gates tally --check" \
+    npx --no-install agent-delivery-gates tally --check
+  RAN=$((RAN + 1))
+else
+  skip_step "tally check" "no docs/gate-tally.md"
+fi
+
+if [ -z "$SKIPPED" ]; then
+  echo "pre-commit: all checks passed"
+else
+  echo "pre-commit: no check failed, but $RAN of 6 ran. NOT RUN: $SKIPPED. Those are unchecked." >&2
+fi
+exit 0

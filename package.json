@@ -1,0 +1,10 @@
+{
+  "name": "tailkeep",
+  "private": true,
+  "devDependencies": {
+    "agent-delivery-gates": "^0.2.3"
+  },
+  "scripts": {
+    "test": "go test ./..."
+  }
+}

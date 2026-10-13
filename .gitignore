@@ -1,0 +1,29 @@
+# tsnet node state (default state dir name and per-node dirs)
+state/
+tailkeep-state/
+tsnet-*/
+
+# Audit logs and other JSON-lines output
+*.jsonl
+
+# Local environment files (may hold auth keys)
+.env*
+
+# Node tooling
+node_modules/
+
+# agentgates downloaded grammars
+.adg/grammars/
+
+# Local Aperture configuration
+aperture.local.*
+*.aperture.local.*
+
+# Build output
+/tailkeep
+/tailkeep.exe
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
