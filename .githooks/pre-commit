@@ -5,13 +5,13 @@
 #
 #   git config core.hooksPath .githooks
 #
-# Runs whatever of these six checks the project has set up: the
-# typecheck, go vet, gofmt, the test suite, the prose scan, and the gate
-# tally check. A check with nothing to run against is skipped and does not
-# block the commit, but a skip is never reported as a pass: each one is
-# printed, the closing line lists every check that did not run, and a skipped
-# test step in a repository that has tests prints a banner saying the tests
-# did not run.
+# Runs whatever of these seven checks the project has set up: the
+# typecheck, go vet, gofmt, the hygiene check, the test suite, the prose
+# scan, and the gate tally check. A check with nothing to run against is
+# skipped and does not block the commit, but a skip is never reported as a
+# pass: each one is printed, the closing line lists every check that did not
+# run, and a skipped test step in a repository that has tests prints a banner
+# saying the tests did not run.
 #
 # Set ADG_SKIP_PRECOMMIT=1 to skip this hook for one commit. The skip is
 # never quiet.
@@ -170,9 +170,21 @@ if [ -f "$ROOT/go.mod" ]; then
   }
   run_step "gofmt" "gofmt -l ." gofmt_clean
   RAN=$((RAN + 1))
+  # The hygiene check reads the files git tracks (the index lists them; the
+  # working tree is what it reads). The owner-value rule needs
+  # TAILKEEP_HYGIENE_PRIVATE; without it that one rule is skipped, loudly.
+  # The list must hold the owner's name exactly as the copyright line of
+  # LICENSE spells it, or that line is reported.
+  if [ -z "${TAILKEEP_HYGIENE_PRIVATE:-}" ]; then
+    echo "pre-commit: hygiene -- owner-value rule SKIPPED (TAILKEEP_HYGIENE_PRIVATE is not set)"
+  fi
+  run_step "hygiene" "go test -tags hygiene -count=1 -run TestRepoHygiene ./internal/hygiene" \
+    go test -tags hygiene -count=1 -run TestRepoHygiene ./internal/hygiene
+  RAN=$((RAN + 1))
 else
   skip_step "go vet" "no go.mod found"
   skip_step "gofmt" "no go.mod found"
+  skip_step "hygiene" "no go.mod found"
 fi
 
 has_test_script=0
@@ -217,6 +229,6 @@ fi
 if [ -z "$SKIPPED" ]; then
   echo "pre-commit: all checks passed"
 else
-  echo "pre-commit: no check failed, but $RAN of 6 ran. NOT RUN: $SKIPPED. Those are unchecked." >&2
+  echo "pre-commit: no check failed, but $RAN of 7 ran. NOT RUN: $SKIPPED. Those are unchecked." >&2
 fi
 exit 0

@@ -1,0 +1,8 @@
+{
+  "claim": "The hygiene check reports a tracked file that holds a banned word, a credential-looking literal, a Tailscale address or name, or an email other than the placeholder domain, and it names the file, line and rule.",
+  "baseline": "go test ./internal/hygiene -run 'TestBannedWords|TestCredentials|TestCGNATAddresses|TestTsNetNames|TestEmails' -count=1",
+  "inject": "go test ./internal/hygiene -run 'TestPlantedFileTripsEveryRule' -count=1",
+  "neutralize": "go test -tags adg_neutralize ./internal/hygiene -run 'TestPlantedFileTripsEveryRule' -count=1",
+  "timeout": 240,
+  "cwd": "."
+}

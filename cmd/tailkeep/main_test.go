@@ -2,17 +2,33 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/emiquelito/tailkeep/internal/server"
 )
 
 const (
 	awsKey = "AKIA" + "IOSFODNN7EXAMPLE"
 	connPw = "s3cretpw"
 )
+
+// TestMain makes any attempt to start real nodes from a test fail loudly.
+func TestMain(m *testing.M) {
+	startNodes = func(context.Context, server.Paths, *slog.Logger) (server.Node, server.Node, error) {
+		panic("a test tried to start real tailnet nodes")
+	}
+	os.Exit(m.Run())
+}
 
 func runCmd(stdin string, args ...string) (code int, stdout, stderr string) {
 	var o, e bytes.Buffer
@@ -86,20 +102,124 @@ func TestCheckErrors(t *testing.T) {
 	}
 }
 
-func TestStubsAndUsage(t *testing.T) {
-	for _, tc := range []struct {
-		args []string
-		want string
-	}{
-		{nil, "tailkeep serve: not implemented yet"},
-		{[]string{"serve"}, "not implemented yet"},
-		{[]string{"doctor"}, "tailkeep doctor: not implemented yet"},
-		{[]string{"bogus"}, "usage:"},
-	} {
-		code, out, errs := runCmd("", tc.args...)
-		if code != 2 || out != "" || !strings.Contains(errs, tc.want) {
-			t.Errorf("%v: code %d, stdout %q, stderr %q", tc.args, code, out, errs)
+func TestUsage(t *testing.T) {
+	code, out, errs := runCmd("", "bogus")
+	if code != 2 || out != "" || !strings.Contains(errs, "usage:") {
+		t.Errorf("code %d, stdout %q, stderr %q", code, out, errs)
+	}
+}
+
+// useServe replaces the serve entry point and returns what it was given.
+func useServe(t *testing.T, err error) *server.Config {
+	t.Helper()
+	got := &server.Config{}
+	old := runServe
+	runServe = func(_ context.Context, c server.Config, _ io.Writer, _ *slog.Logger, _ server.StartFunc) error {
+		*got = c
+		return err
+	}
+	t.Cleanup(func() { runServe = old })
+	return got
+}
+
+func TestServeIsTheDefaultAndTakesFlags(t *testing.T) {
+	got := useServe(t, nil)
+	if code, _, errs := runCmd("", "serve", "--state-dir", "/x/state", "--ollama-url", "http://127.0.0.1:9"); code != 0 {
+		t.Fatalf("code %d %s", code, errs)
+	}
+	if got.StateDir != "/x/state" || got.OllamaURL != "http://127.0.0.1:9" {
+		t.Errorf("config = %+v", *got)
+	}
+	*got = server.Config{}
+	if code, _, _ := runCmd(""); code != 0 || got.OllamaURL != "http://127.0.0.1:11434" || got.StateDir != "" {
+		t.Errorf("default: code %d, config %+v", code, *got)
+	}
+}
+
+func TestServeUsageAndFailureExitCodes(t *testing.T) {
+	useServe(t, errors.New("boom"))
+	if code, _, errs := runCmd("", "serve"); code != 1 || !strings.Contains(errs, "boom") {
+		t.Errorf("failed serve: code %d %q", code, errs)
+	}
+	for _, args := range [][]string{{"serve", "--nope"}, {"serve", "extra"}, {"doctor", "--nope"}, {"doctor", "extra"}} {
+		if code, _, _ := runCmd("", args...); code != 2 {
+			t.Errorf("%v: code %d, want 2", args, code)
 		}
+	}
+	if code, _, errs := runCmd("", "doctor", "--ollama-url", "not a url"); code != 2 || !strings.Contains(errs, "invalid Ollama URL") {
+		t.Errorf("bad url: code %d %q", code, errs)
+	}
+}
+
+// fakeOllama answers like Ollama with or without the model.
+func fakeOllama(t *testing.T, models string) *httptest.Server {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/pull":
+			t.Error("doctor pulled without --pull-model")
+		case "/api/tags":
+			io.WriteString(w, `{"models":[`+models+`]}`)
+		case "/api/generate":
+			io.WriteString(w, `{"response":"ready"}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// stopAtStart replaces the node starter with one that counts its calls and
+// fails, so doctor runs its Ollama checks and stops at the first tailnet step.
+func stopAtStart(t *testing.T) *int {
+	t.Helper()
+	calls := new(int)
+	old := startNodes
+	startNodes = func(context.Context, server.Paths, *slog.Logger) (server.Node, server.Node, error) {
+		*calls++
+		return nil, nil, errors.New("fake: nodes are not started in tests")
+	}
+	t.Cleanup(func() { startNodes = old })
+	return calls
+}
+
+func TestDoctorExitCodes(t *testing.T) {
+	calls := stopAtStart(t)
+	dir := t.TempDir()
+
+	// Ollama is fine, so doctor goes on to the nodes (which fail here).
+	good := fakeOllama(t, `{"name":"granite4.1:3b"}`)
+	code, out, _ := runCmd("", "doctor", "--state-dir", dir, "--ollama-url", good.URL)
+	if code != 1 || *calls != 1 || !strings.Contains(out, "ok    model answers") || !strings.Contains(out, "FAIL  nodes start") {
+		t.Errorf("good Ollama: code %d, starts %d\n%s", code, *calls, out)
+	}
+
+	*calls = 0
+	empty := fakeOllama(t, ``)
+	code, out, _ = runCmd("", "doctor", "--state-dir", dir, "--ollama-url", empty.URL)
+	if code != 1 || !strings.Contains(out, "ollama pull granite4.1:3b") || *calls != 0 {
+		t.Errorf("missing model: code %d %q, starts %d", code, out, *calls)
+	}
+
+	code, out, _ = runCmd("", "doctor", "--state-dir", dir, "--ollama-url", empty.URL, "--model", "other:1b")
+	if code != 1 || !strings.Contains(out, "ollama pull other:1b") {
+		t.Errorf("--model: code %d %q", code, out)
+	}
+}
+
+func TestOllamaURLComesFromTheEnvironment(t *testing.T) {
+	got := useServe(t, nil)
+	t.Setenv("OLLAMA_URL", "http://127.0.0.1:9999")
+	runCmd("", "serve")
+	if got.OllamaURL != "http://127.0.0.1:9999" {
+		t.Errorf("from env: %q", got.OllamaURL)
+	}
+	runCmd("", "serve", "--ollama-url", "http://127.0.0.1:1")
+	if got.OllamaURL != "http://127.0.0.1:1" {
+		t.Errorf("the flag should win: %q", got.OllamaURL)
+	}
+	t.Setenv("OLLAMA_URL", "")
+	runCmd("", "serve")
+	if got.OllamaURL != "http://127.0.0.1:11434" {
+		t.Errorf("default: %q", got.OllamaURL)
 	}
 }
 
@@ -141,5 +261,26 @@ func TestCheckInputLimitBoundary(t *testing.T) {
 	}
 	if code, _, _ := runCmd(strings.Repeat("a", maxInput+1), "check"); code != 2 {
 		t.Fatalf("maxInput+1 bytes: code %d, want 2", code)
+	}
+}
+
+func TestDoctorPullModelFlagReachesTheCheck(t *testing.T) {
+	calls := stopAtStart(t)
+	pulled := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			io.WriteString(w, `{"models":[]}`)
+		case "/api/pull":
+			pulled = true
+			io.WriteString(w, `{"status":"success"}`)
+		case "/api/generate":
+			io.WriteString(w, `{"response":"ready"}`)
+		}
+	}))
+	defer srv.Close()
+	runCmd("", "doctor", "--state-dir", t.TempDir(), "--ollama-url", srv.URL, "--pull-model")
+	if !pulled || *calls != 1 {
+		t.Errorf("pulled %v, starts %d", pulled, *calls)
 	}
 }

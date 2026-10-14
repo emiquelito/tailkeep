@@ -13,6 +13,15 @@ exist.
 |---|------|------|------|----------------|
 | 1 | 2026-10-13 | coverage-as-gap-finder | `internal/classify/ollama_test.go` (TestResponseSizeBoundary) | Mutation run on the classifier client: changing the reply size check from `>` to `>=` survived, so no test pinned the boundary. Added a test with replies of exactly the limit and one byte over. |
 | 2 | 2026-10-13 | coverage-as-gap-finder | `internal/classify/ollama_test.go` (TestFakeNoDelayIgnoresContext) | Mutation run on the test fake: changing the delay check from `> 0` to `>= 0` survived, so no test showed that a fake without a delay answers at once even when the context has ended. Added that test. |
+| 3 | 2026-10-13 | coverage-as-gap-finder | `internal/hygiene/hygiene_test.go` (TestParseIPv4) | Mutation run on the hygiene check: the octet validation in the address parser survived three mutants (an "or" turned into "and" twice, and the not-an-address result turned into an address), so no test pinned how a bad octet is rejected. Replaced the length and range checks with one unsigned 8-bit parse and added a direct test of the parser. |
+| 4 | 2026-10-13 | coverage-as-gap-finder | `internal/hygiene/hygiene_test.go` (TestBinaryAndMediaFilesAreSkipped) | Mutation run on the hygiene check: changing the binary-file test from `>= 0` to `> 0` survived, so no test showed that a file whose first byte is a NUL byte counts as binary. Added that file to the test. |
+| 5 | 2026-10-13 | coverage-as-gap-finder | `internal/hygiene/hygiene_test.go` (TestHints) | Mutation run on the hygiene check: setting the "hint already printed" flag to false survived, so no test showed that two findings on the LICENSE file give one hint line, not two. Added a second finding to the test. |
+| 6 | 2026-10-13 | coverage-as-gap-finder | `internal/server/serve_test.go` (TestServeWiresEachMuxToItsOwnNode) | Review hand mutant on the server wiring: building the web app's resolver from the model node's local client survived, because both fakes described the same user. The two fakes now describe different users and the page must show the guard's. |
+| 7 | 2026-10-13 | coverage-as-gap-finder | `internal/server/serve_test.go` (TestServersGetTheirOwnLimits) | Review hand mutants: giving the model node the web limits, the web app the model node limits, or a ten-hour header timeout all survived, because the limits were only checked to be above zero. The test now pins every value for both servers. |
+| 8 | 2026-10-13 | coverage-as-gap-finder | `internal/server/ollama_test.go` (TestIsLoopback) | Review hand mutant: treating private addresses as this machine survived, so `--pull-model` could have been sent to a LAN host. Added private IPv4 ranges, the shared carrier range and a unique-local IPv6 case. |
+| 9 | 2026-10-13 | coverage-as-gap-finder | `internal/server/doctor_test.go` (TestDoctorPasses, TestDoctorWhoIsFailures) | adg mutate found 17 survivors in the doctor's real tailnet code, and hand mutants skipping the own-address check and asking for the wrong model node name survived. That code sat behind an interface only the live session used. The interface is gone and the same code now runs against fake nodes. |
+| 10 | 2026-10-13 | coverage-as-gap-finder | `internal/server/ollama_test.go` (TestOllamaErrorStatusIsNotOllama) | Review hand mutant: accepting any HTTP status as "Ollama is reachable" survived. Added a test with a 500 answer. |
+| 11 | 2026-10-13 | coverage-as-gap-finder | `internal/server/ollama_test.go` (TestPullModelStreamsProgress, TestAnswersReportsTheTime), `internal/server/serve_test.go` (TestStopReportsARequestThatOutlastsTheWait) | adg mutate after the doctor trim: dropping the JSON Content-Type header and flipping the shutdown error check both survived. The fake Ollama now records the header, and a request held open past the wait shows stop returns the deadline error. |
 
 ## Mutation run notes: audit, llmproxy, web
 
@@ -38,3 +47,19 @@ have a written reason:
   model check at this point, so no output differs. Trigger: the classifier
   is wired in (a later change) and the test for `model_check` on the web
   path is added there.
+
+## Mutation run notes: server, doctor, serve
+
+`adg mutate` on the server files (not `tsnet.go`, which builds the real node
+type; a mutant there once let a test start a real node, so it is no longer
+mutated and tests are barred from reaching it, see
+`TestNoTestStartsARealTailnetNode`). Survivors left, each with a reason (the `Shutdown` error branch of `running.stop`
+was one until `TestStopReportsARequestThatOutlastsTheWait` pinned it):
+
+- `upTimeout` (two minutes) and the node close order: values and ordering
+  with no observable effect offline; both live only around a real node.
+  Trigger: the live session shows a node that needs longer than two minutes,
+  or a close-order problem.
+- `tsnet.go` (`StartNode`, `StartNodes`, `Local`): the thin calls to the real
+  library, proven only in the live session. The first-start key rule
+  (`checkKey`) and the node settings are pure and tested.
