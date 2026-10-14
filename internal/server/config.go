@@ -35,6 +35,7 @@ const (
 type Config struct {
 	StateDir  string // empty means DefaultStateDir
 	OllamaURL string
+	Model     string // the local model; empty means classify.DefaultModel
 }
 
 // Paths are the three places tailkeep keeps state. The sub-directory names
@@ -125,7 +126,9 @@ type Timeouts struct {
 }
 
 // WebTimeouts are for the guard. Requests are small (scan bodies are at most
-// 256 KB) and answers are short, so every limit is short.
+// 256 KB) and answers are short, so every limit is short. The one route that
+// waits on the model, POST /api/answers, sets a longer write deadline for
+// itself (web.answerDeadline); every other route keeps this one.
 var WebTimeouts = Timeouts{
 	ReadHeader:     10 * time.Second,
 	Read:           30 * time.Second,

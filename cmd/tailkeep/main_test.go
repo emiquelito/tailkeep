@@ -136,6 +136,18 @@ func TestServeIsTheDefaultAndTakesFlags(t *testing.T) {
 	}
 }
 
+func TestServeModelFlag(t *testing.T) {
+	got := useServe(t, nil)
+	runCmd("", "serve")
+	if got.Model != "granite4.1:3b" {
+		t.Errorf("default model %q", got.Model)
+	}
+	runCmd("", "serve", "--model", "other:1b")
+	if got.Model != "other:1b" {
+		t.Errorf("--model: %q", got.Model)
+	}
+}
+
 func TestServeUsageAndFailureExitCodes(t *testing.T) {
 	useServe(t, errors.New("boom"))
 	if code, _, errs := runCmd("", "serve"); code != 1 || !strings.Contains(errs, "boom") {

@@ -4,6 +4,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"html/template"
@@ -21,7 +22,7 @@ import (
 	webassets "github.com/emiquelito/tailkeep/web"
 )
 
-// MaxScanBody is the largest request body /api/scans accepts.
+// MaxScanBody is the largest request body /api/scans and /api/answers accept.
 const MaxScanBody = 256 << 10
 
 // malformedCapability is shown to the user when their capability is
@@ -51,7 +52,14 @@ type Config struct {
 	GuardHost string
 	Resolver  identity.Resolver
 	Detector  Detector
-	Audit     *audit.Log
+	// Classifier is the local-model check. It runs only for a caller whose
+	// policy has model_check on, and never when a finding already decides.
+	Classifier classify.Classifier
+	// Answerer sends text to the local model for /api/answers.
+	Answerer Answerer
+	// MaxAnswerChars caps the text sent to the model; 0 means DefaultMaxAnswerChars.
+	MaxAnswerChars int
+	Audit          *audit.Log
 }
 
 type handler struct {
@@ -64,6 +72,12 @@ type handler struct {
 func New(c Config) (http.Handler, error) {
 	if c.GuardHost == "" {
 		return nil, errors.New("web: GuardHost is required")
+	}
+	if c.Classifier == nil || c.Answerer == nil {
+		return nil, errors.New("web: Classifier and Answerer are required")
+	}
+	if c.MaxAnswerChars <= 0 {
+		c.MaxAnswerChars = DefaultMaxAnswerChars
 	}
 	index, err := template.ParseFS(webassets.FS, "index.html")
 	if err != nil {
@@ -109,6 +123,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.auditEntries(w, r)
 	case "POST /api/scans":
 		h.scan(w, r)
+	case "POST /api/answers":
+		h.answer(w, r)
 	default:
 		writeError(w, http.StatusNotFound, "not_found", "no such page")
 	}
@@ -168,17 +184,20 @@ type findingView struct {
 }
 
 // scanResponse carries no offsets: detector offsets are byte offsets, and the
-// page does not need them.
+// page does not need them. Categories come from the classifier's fixed list.
+// The model's own reason is never sent: it is free text written by a model
+// that has read the submitted text.
 type scanResponse struct {
 	Action          policy.Action  `json:"action"`
 	Reason          string         `json:"reason"`
 	Class           classify.Label `json:"class"`
+	Categories      []string       `json:"categories"`
 	Findings        []findingView  `json:"findings"`
 	RedactedPreview string         `json:"redacted_preview,omitempty"`
 }
 
 // scan is the whole path of one check: resolve identity, load policy,
-// detect, classify (skipped for now), decide, audit, respond.
+// detect, classify, decide, audit, respond.
 func (h *handler) scan(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	id, err := h.Resolver.Resolve(r.Context(), r.RemoteAddr) // resolve identity
@@ -187,43 +206,58 @@ func (h *handler) scan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pol := id.Policy(identity.WebPath) // load policy
-	text, status, reason := readText(w, r)
-	if status != 0 {
+	var req scanRequest
+	if status, reason := readBody(w, r, &req); status != 0 {
 		h.refuse(w, id, start, status, reason)
 		return
 	}
-	findings := h.Detector.Detect(text)                                             // detect
-	class := classify.Result{Label: classify.Skipped}                               // classify: wired in later
-	dec := policy.Decide(pol, findings, class)                                      // decide
-	h.record(id, dec.Action, class.Label, findings, audit.FromDecision(dec), start) // audit
-	resp := scanResponse{Action: dec.Action, Reason: dec.Reason, Class: class.Label, Findings: []findingView{}}
-	for _, f := range findings {
+	dec := h.evaluate(r.Context(), pol, req.Text)                                           // detect, classify, decide
+	h.record(id, dec.Action, dec.Class.Label, dec.Findings, audit.FromDecision(dec), start) // audit
+	resp := scanResponse{Action: dec.Action, Reason: dec.Reason, Class: dec.Class.Label,
+		Categories: append([]string{}, dec.Class.Categories...), Findings: []findingView{}}
+	for _, f := range dec.Findings {
 		resp.Findings = append(resp.Findings, findingView{f.Detector, f.Preview})
 	}
-	if len(findings) > 0 {
-		resp.RedactedPreview = h.Detector.Redact(text, findings)
+	if len(dec.Findings) > 0 {
+		resp.RedactedPreview = h.Detector.Redact(req.Text, dec.Findings)
 	}
 	writeJSON(w, http.StatusCreated, resp) // respond
 }
 
-// readText reads and decodes the scan request. A non-zero status is the
-// refusal to send, with the audit reason.
-func readText(w http.ResponseWriter, r *http.Request) (text string, status int, reason audit.Reason) {
+// evaluate is detect, classify and decide for one text, shared by scans and
+// answers. The detectors always scan the full text. The local model is asked
+// only when the policy has model_check on and no detector found anything:
+// with a finding, Decide gives the policy action whatever the model says, so
+// a call could change nothing and the class is skipped. The model's answer
+// goes into Decide and nowhere else, and Decide can only make the outcome
+// stricter. The model's reason text is not passed on.
+func (h *handler) evaluate(ctx context.Context, pol policy.Policy, text string) policy.Decision {
+	findings := h.Detector.Detect(text) // detect
+	class := classify.Result{Label: classify.Skipped}
+	if pol.ModelCheck && len(findings) == 0 {
+		class = h.Classifier.Classify(ctx, text) // classify
+	}
+	class.ModelReason = ""
+	return policy.Decide(pol, findings, class) // decide
+}
+
+// readBody reads and decodes the JSON request into dst. A non-zero status is
+// the refusal to send, with the audit reason.
+func readBody(w http.ResponseWriter, r *http.Request, dst any) (status int, reason audit.Reason) {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxScanBody))
 	dec.DisallowUnknownFields()
-	var req scanRequest
-	err := dec.Decode(&req)
+	err := dec.Decode(dst)
 	if err == nil {
 		_, err = dec.Token() // nothing may follow the object
 		if err == io.EOF {
-			return req.Text, 0, audit.Reason{}
+			return 0, audit.Reason{}
 		}
 	}
 	var tooBig *http.MaxBytesError
 	if errors.As(err, &tooBig) {
-		return "", http.StatusRequestEntityTooLarge, audit.ReasonTooLarge
+		return http.StatusRequestEntityTooLarge, audit.ReasonTooLarge
 	}
-	return "", http.StatusBadRequest, audit.ReasonBadBody
+	return http.StatusBadRequest, audit.ReasonBadBody
 }
 
 // auditEntries lists the entries the caller's view allows, newest first.

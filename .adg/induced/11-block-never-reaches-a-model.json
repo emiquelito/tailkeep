@@ -1,0 +1,8 @@
+{
+  "claim": "Text whose decision is block goes to no model: a blocked answer request gets 403 and neither the classifier-backed answerer nor the local model is called.",
+  "baseline": "go test ./internal/web -count=1",
+  "inject": "go test ./internal/web -run 'TestBlockedAnswerReachesNoModel' -count=1",
+  "neutralize": "go test -tags adg_neutralize ./internal/web -run 'TestBlockedAnswerReachesNoModel' -count=1",
+  "timeout": 240,
+  "cwd": "."
+}

@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/emiquelito/tailkeep/internal/audit"
+	"github.com/emiquelito/tailkeep/internal/classify"
 	"github.com/emiquelito/tailkeep/internal/detect"
 	"github.com/emiquelito/tailkeep/internal/identity"
 	"github.com/emiquelito/tailkeep/internal/policy"
@@ -49,6 +50,8 @@ var callers = map[string]identity.Identity{
 	"badcap": {LoginName: "erin@example.com", NodeName: "erin-laptop",
 		Caps:       []identity.Cap{{Action: ptr(policy.Allow), View: ptr(policy.All)}},
 		CapProblem: "malformed capability: json: internals-of-the-problem"},
+	"nocheck": {LoginName: "frank@example.com", NodeName: "frank-laptop",
+		Caps: []identity.Cap{{Action: ptr(policy.Block), ModelCheck: ptr(false)}}},
 	"xss": {LoginName: "mallory@example.com", NodeName: `<script>alert(1)</script>`},
 }
 
@@ -71,6 +74,8 @@ type rig struct {
 	audit *audit.Log
 	file  *lockedBuffer
 	logs  *lockedBuffer
+	cls   *recClassifier
+	ans   *recAnswerer
 }
 
 type lockedBuffer struct {
@@ -92,12 +97,14 @@ func newRig(t *testing.T) *rig {
 // newRigWith uses out as the audit file writer when it is not nil.
 func newRigWith(t *testing.T, out io.Writer) *rig {
 	t.Helper()
-	r := &rig{file: &lockedBuffer{}, logs: &lockedBuffer{}}
+	r := &rig{file: &lockedBuffer{}, logs: &lockedBuffer{},
+		cls: &recClassifier{res: classify.Result{Label: classify.Clean}}, ans: &recAnswerer{reply: "the answer"}}
 	if out == nil {
 		out = r.file
 	}
 	r.audit = audit.New(out, slog.New(slog.NewJSONHandler(r.logs, nil)))
-	h, err := New(Config{GuardHost: guard, Resolver: fakeResolver{}, Detector: BuiltinDetector{}, Audit: r.audit})
+	h, err := New(Config{GuardHost: guard, Resolver: fakeResolver{}, Detector: BuiltinDetector{},
+		Classifier: r.cls, Answerer: r.ans, MaxAnswerChars: 100, Audit: r.audit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,6 +225,7 @@ func TestSecretNeverAppearsInResponsesOrAudit(t *testing.T) {
 	var all strings.Builder
 	for _, caller := range []string{"alice", "bob", "ci", "redactor", "permissive", "badcap"} {
 		all.WriteString(r.scan(caller, text).Body.String())
+		all.WriteString(r.answer(caller, text, "question words here").Body.String())
 	}
 	for _, caller := range []string{"alice", "bob", "ci", "xss", "stranger"} {
 		all.WriteString(r.do(req{caller: caller, path: "/api/audit-entries"}).Body.String())
@@ -230,8 +238,8 @@ func TestSecretNeverAppearsInResponsesOrAudit(t *testing.T) {
 			t.Errorf("secret %q... found in output", s[:4])
 		}
 	}
-	if strings.Contains(r.file.String(), "context words") {
-		t.Error("scanned text found in the audit file")
+	if strings.Contains(r.file.String(), "context words") || strings.Contains(r.file.String(), "question words") {
+		t.Error("scanned text or a question found in the audit file")
 	}
 	// The preview is at most 4 characters of the secret.
 	if strings.Contains(r.file.String(), "AKIAI") {
@@ -244,7 +252,7 @@ func TestScanResponseCarriesNoOffsets(t *testing.T) {
 	body := r.scan("alice", "é"+fakeKey()).Body.String()
 	var raw map[string]any
 	json.Unmarshal([]byte(body), &raw)
-	if len(raw) != 5 { // action, reason, class, findings, redacted_preview
+	if len(raw) != 6 { // action, reason, class, categories, findings, redacted_preview
 		t.Errorf("unexpected fields in the response: %s", body)
 	}
 	for _, f := range raw["findings"].([]any) {
@@ -442,7 +450,6 @@ func TestUnknownPathsAndMethodsAre404(t *testing.T) {
 	r := newRig(t)
 	for _, q := range []req{
 		{caller: "alice", path: "/api/scans"}, {caller: "alice", path: "/api/answers"},
-		{caller: "alice", method: "POST", path: "/api/answers", body: `{}`},
 		{caller: "alice", method: "POST", path: "/", body: `{}`}, {caller: "alice", path: "/index.html"},
 		{caller: "alice", path: "/audit/"}, {caller: "alice", path: "//audit"},
 		{caller: "alice", method: "DELETE", path: "/api/audit-entries"},
@@ -651,7 +658,7 @@ func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk ful
 // cached between requests.
 func TestIdentityAndPolicyAreResolvedPerRequest(t *testing.T) {
 	flip := &switchingResolver{}
-	h, _ := New(Config{GuardHost: guard, Resolver: flip, Detector: BuiltinDetector{}, Audit: audit.New(nil, nil)})
+	h, _ := New(Config{GuardHost: guard, Resolver: flip, Detector: BuiltinDetector{}, Classifier: &recClassifier{res: classify.Result{Label: classify.Clean}}, Answerer: &recAnswerer{}, Audit: audit.New(nil, nil)})
 	run := func() policy.Action {
 		hr := httptest.NewRequest("POST", "/api/scans", strings.NewReader(`{"text":"`+fakeKey()+`"}`))
 		hr.Host = guard
@@ -695,7 +702,7 @@ func (markerDetector) Detect(text string) []detect.Finding {
 func (markerDetector) Redact(text string, _ []detect.Finding) string { return "gone" }
 
 func TestDetectorIsInjected(t *testing.T) {
-	h, _ := New(Config{GuardHost: guard, Resolver: fakeResolver{}, Detector: markerDetector{}, Audit: audit.New(nil, nil)})
+	h, _ := New(Config{GuardHost: guard, Resolver: fakeResolver{}, Detector: markerDetector{}, Classifier: &recClassifier{res: classify.Result{Label: classify.Clean}}, Answerer: &recAnswerer{}, Audit: audit.New(nil, nil)})
 	hr := httptest.NewRequest("POST", "/api/scans", strings.NewReader(`{"text":"MARK `+fakeKey()+`"}`))
 	hr.Host, hr.RemoteAddr = guard, "bob"
 	hr.Header.Set("Content-Type", "application/json")
@@ -750,7 +757,7 @@ func TestAuditFileIsOneJSONObjectPerLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, _ := New(Config{GuardHost: guard, Resolver: fakeResolver{}, Detector: BuiltinDetector{}, Audit: log})
+	h, _ := New(Config{GuardHost: guard, Resolver: fakeResolver{}, Detector: BuiltinDetector{}, Classifier: &recClassifier{res: classify.Result{Label: classify.Clean}}, Answerer: &recAnswerer{}, Audit: log})
 	hr := httptest.NewRequest("POST", "/api/scans", strings.NewReader(`{"text":"`+fakeKey()+`"}`))
 	hr.Host, hr.RemoteAddr = guard, "alice"
 	hr.Header.Set("Content-Type", "application/json")

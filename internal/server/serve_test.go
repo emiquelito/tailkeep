@@ -127,6 +127,10 @@ func get(t *testing.T, addr, host, path string) (int, string) {
 
 // startServe runs Serve with two fake nodes and an Ollama stub.
 func startServe(t *testing.T, guard, llm *fakeNode) (p Paths, stop func() error) {
+	return startServeModel(t, guard, llm, "")
+}
+
+func startServeModel(t *testing.T, guard, llm *fakeNode, model string) (p Paths, stop func() error) {
 	t.Helper()
 	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{"data":[]}`) }))
 	t.Cleanup(ollama.Close)
@@ -137,7 +141,7 @@ func startServe(t *testing.T, guard, llm *fakeNode) (p Paths, stop func() error)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- Serve(ctx, p, u, guard, llm, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
+	go func() { done <- Serve(ctx, p, u, model, guard, llm, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
 	t.Cleanup(cancel)
 	return p, func() error {
 		cancel()
@@ -399,5 +403,123 @@ func TestStopReportsARequestThatOutlastsTheWait(t *testing.T) {
 	idle, _ := startTLS(newFakeNode("tailkeep.example.test", "who@example.com", `{}`), NewHTTPServer(http.NotFoundHandler(), WebTimeouts))
 	if err := idle.stop(time.Second); err != nil {
 		t.Errorf("idle stop returned %v", err)
+	}
+}
+
+// The classifier and the answerer both call the model node, by its own name,
+// with the guard's HTTP client and the configured model: nothing else in the
+// process can reach the model node's address, and Ollama is never called
+// directly.
+func TestServeWiresTheModelCallsThroughTheGuardClient(t *testing.T) {
+	guard := newFakeNode("tailkeep.example.test", "alice@example.com", `{"action":"reroute"}`)
+	llm := newFakeNode("Tailkeep-LLM.Example.Test.", "x@example.com", `{"llm":true}`)
+	var mu sync.Mutex
+	var seen []string
+	guard.client = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		seen = append(seen, r.URL.String()+" "+string(raw))
+		mu.Unlock()
+		content := `{\"sensitive\":false,\"categories\":[],\"reason\":\"fine\"}`
+		if !strings.Contains(string(raw), `"format"`) {
+			content = "an answer"
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"message":{"content":"` + content + `"}}`))}, nil
+	})}
+	_, stop := startServeModel(t, guard, llm, "model-under-test")
+	guardAddr := addrOf(t, guard)
+	addrOf(t, llm)
+	for path, body := range map[string]string{"/api/scans": `{"text":"hello there"}`, "/api/answers": `{"text":"hello there","question":"q"}`} {
+		req, _ := http.NewRequest("POST", "http://"+guardAddr+path, strings.NewReader(body))
+		req.Host = "tailkeep.example.test"
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 201 {
+			t.Fatalf("%s: %d %s", path, resp.StatusCode, body)
+		}
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	// A scan classifies once; an answer classifies and then answers.
+	if len(seen) != 3 {
+		t.Fatalf("model node calls: %d, want 3", len(seen))
+	}
+	answers := 0
+	for _, call := range seen {
+		if !strings.HasPrefix(call, "https://tailkeep-llm.example.test/api/chat ") || !strings.Contains(call, `"model":"model-under-test"`) {
+			t.Errorf("call %.150q", call)
+		}
+		if !strings.Contains(call, `"format"`) {
+			answers++
+		}
+	}
+	if answers != 1 {
+		t.Errorf("%d calls without a schema, want the one answer", answers)
+	}
+}
+
+func TestServeDefaultsTheModelName(t *testing.T) {
+	guard := newFakeNode("tailkeep.example.test", "alice@example.com", `{"action":"allow","on_unknown":"allow"}`)
+	llm := newFakeNode("tailkeep-llm.example.test", "x@example.com", `{"llm":true}`)
+	var body string
+	guard.client = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		raw, _ := io.ReadAll(r.Body)
+		body = string(raw)
+		return nil, errors.New("down")
+	})}
+	_, stop := startServe(t, guard, llm)
+	addr := addrOf(t, guard)
+	addrOf(t, llm)
+	req, _ := http.NewRequest("POST", "http://"+addr+"/api/answers", strings.NewReader(`{"text":"hi","question":"q"}`))
+	req.Host = "tailkeep.example.test"
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	stop()
+	if resp.StatusCode != 502 || !strings.Contains(body, `"model":"granite4.1:3b"`) {
+		t.Errorf("status %d, body %q", resp.StatusCode, body)
+	}
+}
+
+// --model reaches the model calls through Run, not only through Serve.
+func TestRunPassesTheModelToServe(t *testing.T) {
+	guard := newFakeNode("tailkeep.example.test", "alice@example.com", `{"action":"allow","on_unknown":"allow"}`)
+	llm := newFakeNode("tailkeep-llm.example.test", "x@example.com", `{"llm":true}`)
+	var body string
+	guard.client = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		raw, _ := io.ReadAll(r.Body)
+		body = string(raw)
+		return nil, errors.New("down")
+	})}
+	start, _ := fakeStart(guard, llm, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	cfg := Config{StateDir: t.TempDir(), OllamaURL: "http://127.0.0.1:1", Model: "run-model"}
+	go func() { done <- Run(ctx, cfg, io.Discard, slog.New(slog.NewTextHandler(io.Discard, nil)), start) }()
+	addr := addrOf(t, guard)
+	addrOf(t, llm)
+	req, _ := http.NewRequest("POST", "http://"+addr+"/api/answers", strings.NewReader(`{"text":"hi","question":"q"}`))
+	req.Host = "tailkeep.example.test"
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	cancel()
+	<-done
+	if !strings.Contains(body, `"model":"run-model"`) {
+		t.Errorf("model call body %.120q", body)
 	}
 }

@@ -22,6 +22,7 @@ exist.
 | 9 | 2026-10-13 | coverage-as-gap-finder | `internal/server/doctor_test.go` (TestDoctorPasses, TestDoctorWhoIsFailures) | adg mutate found 17 survivors in the doctor's real tailnet code, and hand mutants skipping the own-address check and asking for the wrong model node name survived. That code sat behind an interface only the live session used. The interface is gone and the same code now runs against fake nodes. |
 | 10 | 2026-10-13 | coverage-as-gap-finder | `internal/server/ollama_test.go` (TestOllamaErrorStatusIsNotOllama) | Review hand mutant: accepting any HTTP status as "Ollama is reachable" survived. Added a test with a 500 answer. |
 | 11 | 2026-10-13 | coverage-as-gap-finder | `internal/server/ollama_test.go` (TestPullModelStreamsProgress, TestAnswersReportsTheTime), `internal/server/serve_test.go` (TestStopReportsARequestThatOutlastsTheWait) | adg mutate after the doctor trim: dropping the JSON Content-Type header and flipping the shutdown error check both survived. The fake Ollama now records the header, and a request held open past the wait shows stop returns the deadline error. |
+| 12 | 2026-10-13 | coverage-as-gap-finder | `internal/web/answer_test.go` (TestNewRequiresClassifierAndAnswerer, TestZeroAnswerCapMeansTheDefault) | adg mutate on the classifier wiring and the answers route: the constructor check for a missing classifier or answerer accepted a config missing only one of them, and a zero answer cap ("use the default") could become "send nothing" without a test noticing. Both now have tests. |
 
 ## Mutation run notes: audit, llmproxy, web
 
@@ -42,11 +43,10 @@ have a written reason:
   already caps every result. The line stays so raising the ring size cannot
   raise the page limit by accident. Trigger: `RingSize` and `MaxLimit` are
   set apart.
-- web scan: loading the policy with `HookPath` instead of `WebPath`. The
-  paths differ only in the `model_check` default, and the scan skips the
-  model check at this point, so no output differs. Trigger: the classifier
-  is wired in (a later change) and the test for `model_check` on the web
-  path is added there.
+- web scan: loading the policy with `HookPath` instead of `WebPath`. It
+  survived while the scan skipped the model check. Closed once the web path
+  asked the classifier: `TestWebPathModelCheckDefaultIsOn` fails on that mutant, because a
+  caller whose capability does not mention `model_check` must be classified.
 
 ## Mutation run notes: server, doctor, serve
 
@@ -63,3 +63,16 @@ was one until `TestStopReportsARequestThatOutlastsTheWait` pinned it):
 - `tsnet.go` (`StartNode`, `StartNodes`, `Local`): the thin calls to the real
   library, proven only in the live session. The first-start key rule
   (`checkKey`) and the node settings are pure and tested.
+
+## Mutation run notes: classifier wiring and answers
+
+`adg mutate` on `internal/web/web.go`, `internal/web/answer.go`,
+`internal/server/serve.go`, `internal/server/config.go` and
+`cmd/tailkeep/main.go`: 111 attempted, 82 killed, 2 survived (both killed
+after the two tests in row 12), 16 timeouts and 11 that do not build. The
+timeouts are `err != nil` flipped to `== nil` in the serve wiring and
+config code, which hangs a test: they end the run as failed, not as passed.
+The 11 build failures are string `+` to `-` mutants. 56 hand mutants in a
+scratch copy (block gate, cap and note, skip rule, unknown handling, write
+deadline, model reason leaks, audit calls, client and host wiring, flag):
+all killed.

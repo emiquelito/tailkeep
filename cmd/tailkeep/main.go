@@ -84,12 +84,13 @@ func check(args []string, in io.Reader, out, errw io.Writer) int {
 
 // commonFlags defines the flags serve and doctor share. The Ollama address
 // defaults to the OLLAMA_URL environment variable when it is set.
-func commonFlags(name string, errw io.Writer) (fs *flag.FlagSet, stateDir, ollama *string) {
+func commonFlags(name string, errw io.Writer) (fs *flag.FlagSet, stateDir, ollama, model *string) {
 	fs = flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(errw)
 	stateDir = fs.String("state-dir", "", "where node state is kept (default: <user config dir>/tailkeep)")
 	ollama = fs.String("ollama-url", envOr("OLLAMA_URL", defaultOllamaURL), "address of Ollama (default: $OLLAMA_URL, else "+defaultOllamaURL+")")
-	return fs, stateDir, ollama
+	model = fs.String("model", defaultModel, "the local model: classifier, answers and doctor checks")
+	return fs, stateDir, ollama, model
 }
 
 func envOr(name, fallback string) string {
@@ -101,14 +102,14 @@ func envOr(name, fallback string) string {
 
 // serve runs both nodes until SIGINT or SIGTERM.
 func serve(args []string, out, errw io.Writer) int {
-	fs, stateDir, ollama := commonFlags("serve", errw)
+	fs, stateDir, ollama, model := commonFlags("serve", errw)
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
 		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	log := slog.New(slog.NewTextHandler(errw, nil))
-	if err := runServe(ctx, server.Config{StateDir: *stateDir, OllamaURL: *ollama}, out, log, startNodes); err != nil {
+	if err := runServe(ctx, server.Config{StateDir: *stateDir, OllamaURL: *ollama, Model: *model}, out, log, startNodes); err != nil {
 		fmt.Fprintln(errw, "tailkeep serve:", err)
 		return 1
 	}
@@ -117,8 +118,7 @@ func serve(args []string, out, errw io.Writer) int {
 
 // doctor checks Ollama and both nodes, and stops at the first failure.
 func doctor(args []string, out, errw io.Writer) int {
-	fs, stateDir, ollama := commonFlags("doctor", errw)
-	model := fs.String("model", defaultModel, "model the local checks use")
+	fs, stateDir, ollama, model := commonFlags("doctor", errw)
 	pull := fs.Bool("pull-model", false, "pull the model through Ollama on this machine if it is missing")
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
 		return 2

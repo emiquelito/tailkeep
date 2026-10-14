@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/emiquelito/tailkeep/internal/audit"
+	"github.com/emiquelito/tailkeep/internal/classify"
 	"github.com/emiquelito/tailkeep/internal/identity"
 	"github.com/emiquelito/tailkeep/internal/llmproxy"
 	"github.com/emiquelito/tailkeep/internal/web"
@@ -37,14 +39,16 @@ func Run(ctx context.Context, cfg Config, out io.Writer, log *slog.Logger, start
 	}
 	defer guard.Close()
 	defer llm.Close()
-	return Serve(ctx, p, ollama, guard, llm, log)
+	return Serve(ctx, p, ollama, cfg.Model, guard, llm, log)
 }
 
 // Serve wires the handlers to the two nodes and runs until ctx is cancelled
 // or a server fails. Each node uses its own local client to identify
 // callers, because the capabilities WhoIs returns are the ones a caller holds
-// toward that node.
-func Serve(ctx context.Context, p Paths, ollama *url.URL, guard, llm Node, log *slog.Logger) error {
+// toward that node. The classifier and the answerer reach the model node by
+// its MagicDNS name, with the guard's own client, so every call goes over the
+// tailnet and the model node checks it.
+func Serve(ctx context.Context, p Paths, ollama *url.URL, model string, guard, llm Node, log *slog.Logger) error {
 	auditLog, err := audit.Open(p.Audit, log)
 	if err != nil {
 		return err
@@ -59,11 +63,20 @@ func Serve(ctx context.Context, p Paths, ollama *url.URL, guard, llm Node, log *
 	if err != nil {
 		return err
 	}
+	llmHost, err := GuardHost(llm.CertDomains())
+	if err != nil {
+		return err
+	}
+	model = cmp.Or(model, classify.DefaultModel)
+	modelNode := "https://" + llmHost
 	webHandler, err := web.New(web.Config{
 		GuardHost: host,
 		Resolver:  identity.NewTSNetResolver(guardLocal, log),
 		Detector:  web.BuiltinDetector{},
-		Audit:     auditLog,
+		Classifier: classify.NewOllama(classify.Config{
+			BaseURL: modelNode, HTTPClient: guard.HTTPClient(), Model: model}),
+		Answerer: web.ChatAnswerer{BaseURL: modelNode, Client: guard.HTTPClient(), Model: model},
+		Audit:    auditLog,
 	})
 	if err != nil {
 		return err

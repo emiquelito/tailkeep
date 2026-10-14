@@ -19,6 +19,10 @@
   .reroute { background: #0b5cad; }
   .block, .denied { background: #b42318; }
   pre { white-space: pre-wrap; word-break: break-all; background: #f3f4f6; padding: 8px; border-radius: 6px; }
+  #ask-box { display: none; border: 2px solid #1b1f24; border-radius: 8px; padding: 12px 20px; margin-top: 16px; }
+  #question { width: 100%; box-sizing: border-box; font-size: 20px; padding: 8px; }
+  #answer-error { color: #b42318; font-weight: bold; }
+  #answer-out { display: none; }
   #problem { color: #b42318; font-weight: bold; }
 </style>
 </head>
@@ -45,6 +49,17 @@
     <pre id="redacted"></pre>
   </div>
 </div>
+<div id="ask-box">
+  <h3>Ask the local model about this text</h3>
+  <input id="question" type="text" maxlength="1000" placeholder="Your question" aria-label="Question">
+  <div><button id="ask">Ask</button></div>
+  <div id="answer-error"></div>
+  <div id="answer-out">
+    <h3>answered by the local model on this tailnet</h3>
+    <div id="answer-note"></div>
+    <pre id="answer"></pre>
+  </div>
+</div>
 <script>
 // Everything from the server is written with textContent.
 function el(id) { return document.getElementById(id); }
@@ -69,6 +84,11 @@ function show(data) {
   el('redacted-box').style.display = data.redacted_preview ? 'block' : 'none';
   el('redacted').textContent = data.redacted_preview || '';
   el('result').style.display = 'block';
+  // Asking is offered only when the decision is not block. The server decides
+  // again when the question is sent.
+  el('ask-box').style.display = data.action !== 'block' && data.action !== 'denied' ? 'block' : 'none';
+  el('answer-out').style.display = 'none';
+  el('answer-error').textContent = '';
 }
 
 function showError(message) {
@@ -85,6 +105,38 @@ el('check').addEventListener('click', function () {
       if (resp.ok) { show(body); } else { showError(body.reason || 'request failed'); }
     });
   }).catch(function () { showError('request failed'); });
+});
+
+function showAnswer(data) {
+  el('answer-error').textContent = '';
+  el('answer-note').textContent = data.note || '';
+  el('answer').textContent = data.answer; // untrusted model output: text only
+  el('answer-out').style.display = 'block';
+}
+
+// Editing the text makes the last scan and answer stale: hide them until the
+// next scan.
+el('text').addEventListener('input', function () {
+  el('ask-box').style.display = 'none';
+  el('answer-out').style.display = 'none';
+  el('answer-error').textContent = '';
+});
+
+el('ask').addEventListener('click', function () {
+  el('ask').disabled = true;
+  el('answer-out').style.display = 'none';
+  el('answer-error').textContent = 'asking...';
+  fetch('/api/answers', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: el('text').value, question: el('question').value })
+  }).then(function (resp) {
+    return resp.json().then(function (body) {
+      if (resp.ok) { showAnswer(body); } else { el('answer-error').textContent = body.reason || 'request failed'; }
+    });
+  }).catch(function () {
+    el('answer-error').textContent = 'request failed';
+  }).then(function () { el('ask').disabled = false; });
 });
 </script>
 </body>
