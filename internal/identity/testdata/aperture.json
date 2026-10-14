@@ -1,0 +1,12 @@
+{
+  "Node": {
+    "ID": 13,
+    "StableID": "nApertureNode1",
+    "Name": "aperture.<tailnet>.ts.net.",
+    "ComputedName": "aperture",
+    "Addresses": ["192.0.2.13/32"],
+    "Tags": ["tag:aperture"]
+  },
+  "UserProfile": {"ID": 1003, "LoginName": "tagged-devices", "DisplayName": "Tagged Devices"},
+  "CapMap": {"github.com/emiquelito/tailkeep": [{"hook": true, "llm": true}]}
+}

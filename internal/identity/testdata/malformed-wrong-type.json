@@ -1,0 +1,12 @@
+{
+  "Node": {
+    "ID": 17,
+    "StableID": "nBadDevice1",
+    "Name": "bad-laptop.<tailnet>.ts.net.",
+    "ComputedName": "bad-laptop",
+    "Addresses": ["192.0.2.17/32"],
+    "Tags": null
+  },
+  "UserProfile": {"ID": 1004, "LoginName": "carol@example.com", "DisplayName": "Carol Example"},
+  "CapMap": {"github.com/emiquelito/tailkeep": [{"action": 5, "hook": true}]}
+}

@@ -1,0 +1,12 @@
+{
+  "Node": {
+    "ID": 14,
+    "StableID": "nCiAgentNode1",
+    "Name": "ci-box.<tailnet>.ts.net.",
+    "ComputedName": "ci-box",
+    "Addresses": ["192.0.2.14/32"],
+    "Tags": ["tag:ci-agent"]
+  },
+  "UserProfile": {"ID": 1003, "LoginName": "tagged-devices", "DisplayName": "Tagged Devices"},
+  "CapMap": null
+}

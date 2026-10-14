@@ -1,0 +1,12 @@
+{
+  "Node": {
+    "ID": 19,
+    "StableID": "nTwoGrants1",
+    "Name": "dave-laptop.<tailnet>.ts.net.",
+    "ComputedName": "dave-laptop",
+    "Addresses": ["192.0.2.19/32"],
+    "Tags": null
+  },
+  "UserProfile": {"ID": 1005, "LoginName": "dave@example.com", "DisplayName": "Dave Example"},
+  "CapMap": {"github.com/emiquelito/tailkeep": [{"action": "allow", "on_unknown": "allow", "view": "all"}, {"action": "reroute", "on_unknown": "block", "hook": true}]}
+}

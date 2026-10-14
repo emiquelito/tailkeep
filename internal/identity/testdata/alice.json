@@ -1,0 +1,12 @@
+{
+  "Node": {
+    "ID": 11,
+    "StableID": "nAliceDevice1",
+    "Name": "alice-laptop.<tailnet>.ts.net.",
+    "ComputedName": "alice-laptop",
+    "Addresses": ["192.0.2.11/32"],
+    "Tags": null
+  },
+  "UserProfile": {"ID": 1001, "LoginName": "alice@example.com", "DisplayName": "Alice Example"},
+  "CapMap": {"github.com/emiquelito/tailkeep": [{"action": "reroute", "on_unknown": "block", "model_check": true, "view": "all"}]}
+}

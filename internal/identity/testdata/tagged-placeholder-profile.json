@@ -1,0 +1,12 @@
+{
+  "Node": {
+    "ID": 15,
+    "StableID": "nGuardNode1",
+    "Name": "build-runner.<tailnet>.ts.net.",
+    "ComputedName": "build-runner",
+    "Addresses": ["192.0.2.15/32"],
+    "Tags": ["tag:ci-agent", "tag:build"]
+  },
+  "UserProfile": {"ID": 1003, "LoginName": "tagged-devices", "DisplayName": "Tagged Devices"},
+  "CapMap": {"github.com/emiquelito/tailkeep": [{"action": "block"}]}
+}

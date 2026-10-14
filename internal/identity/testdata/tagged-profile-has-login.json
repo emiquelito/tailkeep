@@ -1,0 +1,12 @@
+{
+  "Node": {
+    "ID": 16,
+    "StableID": "nCiAgentNode2",
+    "Name": "ci-box-2.<tailnet>.ts.net.",
+    "ComputedName": "ci-box-2",
+    "Addresses": ["192.0.2.16/32"],
+    "Tags": ["tag:ci-agent"]
+  },
+  "UserProfile": {"ID": 1001, "LoginName": "alice@example.com", "DisplayName": "Alice Example"},
+  "CapMap": {"github.com/emiquelito/tailkeep": [{"action": "block"}]}
+}
