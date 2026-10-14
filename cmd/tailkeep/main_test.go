@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -22,12 +23,53 @@ const (
 	connPw = "s3cretpw"
 )
 
-// TestMain makes any attempt to start real nodes from a test fail loudly.
+// testHome is the temporary directory that stands in for the user's home and
+// config directories during these tests.
+var testHome string
+
+// TestMain makes any attempt to start real nodes from a test fail loudly, and
+// moves the user config directory into a temporary one so a test that falls
+// back to the default state directory cannot touch the real one.
 func TestMain(m *testing.M) {
 	startNodes = func(context.Context, server.Paths, *slog.Logger) (server.Node, server.Node, error) {
 		panic("a test tried to start real tailnet nodes")
 	}
-	os.Exit(m.Run())
+	os.Exit(runIsolated(m))
+}
+
+func runIsolated(m *testing.M) int {
+	dir, err := os.MkdirTemp("", "tailkeep-test-home-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer os.RemoveAll(dir)
+	testHome = dir
+	// Pin the real Go locations first: with HOME moved, go would otherwise
+	// use a fresh module cache under the temp dir and fetch every module.
+	for _, k := range []string{"GOMODCACHE", "GOCACHE", "GOPATH"} {
+		if out, err := exec.Command("go", "env", k).Output(); err == nil {
+			if v := strings.TrimSpace(string(out)); v != "" {
+				os.Setenv(k, v)
+			}
+		}
+	}
+	for _, k := range []string{"HOME", "XDG_CONFIG_HOME", "APPDATA"} {
+		os.Setenv(k, dir)
+	}
+	return m.Run()
+}
+
+// TestDefaultStateDirIsIsolated checks that TestMain pointed the user config
+// directory at a temporary one, so no test can reach the real state directory.
+func TestDefaultStateDirIsIsolated(t *testing.T) {
+	dir, err := server.DefaultStateDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(dir, testHome+string(os.PathSeparator)) {
+		t.Fatalf("default state dir %q is not under the test home %q", dir, testHome)
+	}
 }
 
 func runCmd(stdin string, args ...string) (code int, stdout, stderr string) {

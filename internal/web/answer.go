@@ -80,6 +80,10 @@ func (h *handler) answer(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, id, start, http.StatusForbidden, audit.ReasonMalformedCap)
 		return
 	}
+	if len(id.Caps) == 0 { // no grant at all: no model answers this caller
+		h.refuse(w, id, start, http.StatusForbidden, reasonNoGrant)
+		return
+	}
 	pol := id.Policy(identity.WebPath) // load policy
 	req, status, reason := readAnswer(w, r)
 	if status != 0 {

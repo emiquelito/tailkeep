@@ -52,7 +52,10 @@ var callers = map[string]identity.Identity{
 		CapProblem: "malformed capability: json: internals-of-the-problem"},
 	"nocheck": {LoginName: "frank@example.com", NodeName: "frank-laptop",
 		Caps: []identity.Cap{{Action: ptr(policy.Block), ModelCheck: ptr(false)}}},
-	"xss": {LoginName: "mallory@example.com", NodeName: `<script>alert(1)</script>`},
+	"nogrant":  {LoginName: "gina@example.com", NodeName: "gina-laptop"},
+	"hookonly": {LoginName: "hal@example.com", NodeName: "hal-laptop", Caps: []identity.Cap{{Hook: true}}},
+	"viewonly": {LoginName: "ivy@example.com", NodeName: "ivy-laptop", Caps: []identity.Cap{{View: ptr(policy.Self)}}},
+	"xss":      {LoginName: "mallory@example.com", NodeName: `<script>alert(1)</script>`},
 }
 
 // An address not in the map is an unknown caller: the resolver fails.

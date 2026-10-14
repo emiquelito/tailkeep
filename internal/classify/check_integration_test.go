@@ -193,23 +193,18 @@ func TestClassifierCheck(t *testing.T) {
 	report(t, model, outcomes)
 }
 
-// checkModelPresent confirms the server is up and has the model, using only
-// read-only endpoints.
+// checkModelPresent confirms the server is up and lists the model, using only
+// the read-only GET /v1/models. That endpoint is served by Ollama and by the
+// tailkeep model node alike, which does not serve Ollama's /api/version or
+// /api/tags.
 func checkModelPresent(t *testing.T, client *http.Client, baseURL, model string) {
 	t.Helper()
-	var version struct{ Version string }
-	getJSON(t, client, baseURL+"/api/version", &version)
-	var tags struct {
-		Models []struct{ Name string }
+	var list modelList
+	getJSON(t, client, baseURL+"/v1/models", &list)
+	if !list.has(model) {
+		t.Fatalf("model %s is not listed by %s/v1/models", model, baseURL)
 	}
-	getJSON(t, client, baseURL+"/api/tags", &tags)
-	for _, m := range tags.Models {
-		if m.Name == model {
-			fmt.Printf("server version %s, model %s present\n", version.Version, model)
-			return
-		}
-	}
-	t.Fatalf("model %s is not present on the server", model)
+	fmt.Printf("model %s listed\n", model)
 }
 
 func getJSON(t *testing.T, client *http.Client, url string, into any) {

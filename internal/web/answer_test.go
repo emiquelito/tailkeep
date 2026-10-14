@@ -164,9 +164,9 @@ func TestWebPathModelCheckDefaultIsOn(t *testing.T) {
 		t.Errorf("default web policy did not ask the model: %+v", got)
 	}
 	r = newRig(t)
-	r.scan("xss", plainText) // a caller with no capability: deny policy, model check on
+	r.scan("hookonly", plainText) // a grant that does not mention model_check: checked
 	if r.cls.count() != 1 {
-		t.Errorf("caller without a capability was not model checked")
+		t.Errorf("caller with a grant and no model_check was not model checked")
 	}
 }
 
@@ -594,5 +594,55 @@ func TestIndexPageHasTheAskControl(t *testing.T) {
 	}
 	if strings.Contains(body, "answer.innerHTML") {
 		t.Error("the answer must be shown with textContent only")
+	}
+}
+
+// A-1: a caller with no tailkeep grant is refused on answers, before the body
+// is read, with a fixed reason, one audit row and no model of any kind.
+func TestNoGrantCallerIsRefusedOnAnswers(t *testing.T) {
+	r := newRig(t)
+	rec := r.answer("nogrant", plainText, "q")
+	checkError(t, rec, 403, "forbidden")
+	if !strings.Contains(rec.Body.String(), "no tailkeep grant for this device") {
+		t.Errorf("body %s", rec.Body)
+	}
+	if r.ans.count() != 0 || r.cls.count() != 0 {
+		t.Error("a no-grant caller reached a model")
+	}
+	if lines := r.auditLines(); len(lines) != 1 || !strings.Contains(lines[0], `"action":"denied"`) || !strings.Contains(lines[0], "no tailkeep grant") {
+		t.Errorf("audit %v", lines)
+	}
+	r = newRig(t) // before the body: a bad body is still 403, not 400
+	checkError(t, r.do(req{caller: "nogrant", method: "POST", path: "/api/answers", body: "{not json"}), 403, "forbidden")
+}
+
+// Any grant at all, even one with no opinion on the policy, leaves the check
+// alone: the caller reaches the policy decision as before.
+func TestAnyGrantPassesTheNoGrantCheckOnAnswers(t *testing.T) {
+	for _, caller := range []string{"hookonly", "viewonly", "guard"} {
+		r := newRig(t)
+		rec := r.answer(caller, plainText, "q")
+		if rec.Code != 201 || r.cls.count() != 1 || r.ans.count() != 1 { // clean text: the policy path allows
+			t.Errorf("%s: status %d, classifier %d, answerer %d: %s", caller, rec.Code, r.cls.count(), r.ans.count(), rec.Body)
+		}
+	}
+}
+
+// A-1: a no-grant scan runs the detectors and decides with the deny policy,
+// but no model reads the text.
+func TestNoGrantScanSkipsTheClassifier(t *testing.T) {
+	r := newRig(t)
+	r.cls.res = classify.Result{Label: classify.Sensitive}
+	rec := r.scan("nogrant", plainText)
+	if rec.Code != 201 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if got := decodeScan(t, rec); got.Class != classify.Skipped || got.Action != policy.Allow || r.cls.count() != 0 {
+		t.Errorf("clean text: %+v, classifier calls %d", got, r.cls.count())
+	}
+	rec = r.scan("nogrant", "key "+fakeKey())
+	got := decodeScan(t, rec)
+	if rec.Code != 201 || got.Action != policy.Block || len(got.Findings) == 0 || r.cls.count() != 0 {
+		t.Errorf("fake key: %d %+v, classifier calls %d", rec.Code, got, r.cls.count())
 	}
 }

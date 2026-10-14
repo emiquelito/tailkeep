@@ -29,6 +29,9 @@ const MaxScanBody = 256 << 10
 // malformed. The detail of the problem stays in the log.
 const malformedCapability = "malformed capability (deny)"
 
+// reasonNoGrant is the fixed reason for a caller that holds no tailkeep grant.
+var reasonNoGrant = audit.FromDecision(policy.Decision{Reason: "no tailkeep grant for this device"})
+
 // Detector is what the web app needs from a detector. It is defined here, by
 // its first consumer, and kept to the two calls the app makes.
 type Detector interface {
@@ -210,6 +213,9 @@ func (h *handler) scan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pol := id.Policy(identity.WebPath) // load policy
+	if len(id.Caps) == 0 {             // no grant: detectors only, no model reads the text
+		pol.ModelCheck = false
+	}
 	var req scanRequest
 	if status, reason := readBody(w, r, &req); status != 0 {
 		h.refuse(w, id, start, status, reason)

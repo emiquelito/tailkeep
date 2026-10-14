@@ -15,10 +15,8 @@ With the example policy in [examples/policy.example.hujson](examples/policy.exam
 | Caller | Result |
 |---|---|
 | `alice@example.com` (action `reroute`) | finding `aws_access_key`; the web app lets her ask the local model about the text, and the answer never leaves the tailnet |
-| `bob@example.com` (action `block`) | finding `aws_access_key`; the text goes to no model |
+| `bob@example.com` (action `block`) | finding `aws_access_key`; the text is not sent to any model for an answer |
 | a device with no `llm` grant, calling the model node | `403`, naming the device |
-
-<!-- demo GIF: docs/media/tailkeep-demo.gif, added by the owner -->
 
 ## How it works
 
@@ -48,9 +46,9 @@ The four actions:
 | `allow` | receives the text as written | may receive it |
 | `redact` | receives the text with every finding swapped for a `[REDACTED:<detector>]` marker | may receive it |
 | `reroute` | receives nothing. The web app has the local model answer instead; through Aperture the request is refused with a note telling the sender to use the local model (see [Using it with Aperture](#using-it-with-aperture)) | may receive it |
-| `block` | receives nothing | receives nothing either: no model is given the text |
+| `block` | receives nothing | is not asked for an answer. The local classifier may still read the first 2,000 characters when `model_check` is on |
 
-A note on `block`. When `model_check` is on, the local classifier reads the first 2,000 characters of the text to reach its decision, even for a caller whose action is `block`. That classifier is the only model that sees the text. A caller who wants no model to see it at all can set `model_check` to `false` in their grant.
+A note on `block`. "Block" means the text is not sent to any model for an answer. It does not mean no model reads it: when `model_check` is on, the local classifier reads the first 2,000 characters of the text to reach its decision, even for a caller whose action is `block`. That classifier, on this tailnet, is the only model that sees it. A caller who wants no model to see it at all can set `model_check` to `false` in their grant.
 
 Running two nodes from one program gives each its own address, tags and grants. That lets the policy admit Aperture to the model node and nobody else, and lets the guard call the model node as an ordinary peer.
 
@@ -116,7 +114,7 @@ You need a tailnet with MagicDNS and HTTPS certificates enabled, Ollama running 
 
 Do not run `doctor` while `serve` is running on the same state directory. Both use the same node state, and `doctor` starts its own copies of the nodes.
 
-The first certificate for each name takes about 35 seconds. `serve` fetches both before it listens, and `doctor` fetches them too, so run `doctor` once before a demo.
+On the first start the certificate fetch took about 31 to 35 seconds per node in a live run. A restart reuses the stored certificates and took about 0.1 to 0.3 seconds. `serve` fetches both before it listens, and `doctor` fetches them too, so run `doctor` once before a demo. In the live run `doctor` passed all its checks, and `serve` started right after it on the same state directory.
 
 Ollama can run on a CPU, but that is untested here, and it will be slower. `doctor` prints the measured time of one small prompt.
 
@@ -158,13 +156,13 @@ A grant that leaves a field out has no opinion on it. A grant that only sets `ho
 
 The reason: adding a grant can add permissions, but it can never weaken protection by accident.
 
-**No capability.** A caller with no tailkeep capability gets `action: block`, `on_unknown: block`, `view: self`, no `hook`, no `llm`. The model check is on for the web app, so the caller is checked as closely as someone with an explicit `block` grant.
+**No capability.** A caller with no tailkeep capability gets `action: block`, `on_unknown: block`, `view: self`, no `hook`, no `llm`. On the web app such a device cannot use `POST /api/answers` (it gets `403`, reason "no tailkeep grant for this device", and is audited), and its `POST /api/scans` runs the detectors only: the local classifier is skipped and the class is `skipped`, so no model reads its text. Any grant, even one that only sets `hook` or `view`, lifts this. A malformed capability is refused as described next.
 
 **Malformed capability.** If any grant is not valid JSON, has a wrong type, has a value tailkeep does not accept, or has a field tailkeep does not know, the whole capability is rejected and the caller gets the same policy as having none. The web app shows "malformed capability (deny)", `POST /api/answers` and the model node answer `403`, and the cause is logged. An unknown field denies the capability on purpose, so a typo such as `acton` cannot become "no opinion". The cost is that adding a field in a newer version of tailkeep denies callers on an older binary until it is upgraded.
 
-A caller with no tailkeep capability can still reach the web app if the network grants let them connect, and their clean text gets the `allow` action, so they can ask the local model questions. Use network grants to control who can reach `tag:tailkeep:443`.
+A caller with no tailkeep capability can still reach the web app if the network grants let them connect, but they get no answers (`403`) and only a detector-only scan. Use network grants to control who can reach `tag:tailkeep:443`.
 
-Grants are read from WhoIs on every request. tailkeep keeps no policy cache and needs no restart when a grant changes. How long a change takes to reach the nodes through the control plane has not been measured for this README (UNPROVEN).
+Grants are read from WhoIs on every request. tailkeep keeps no policy cache and needs no restart when a grant changes. In one quick live check a policy file change reached tailkeep in about 1 to 2 seconds (approximate, one check, not a benchmark).
 
 ### Web app endpoints
 
@@ -174,7 +172,7 @@ tailkeep's own JSON API uses plural nouns, with the HTTP method as the action. T
 |---|---|---|
 | `GET /`, `GET /audit` | the app page and the audit page | `200` |
 | `POST /api/scans` | body `{"text": "..."}`; returns the action, reason, findings (detector and a short preview), classification and, when there are spans, a redacted preview. The text is not stored | `201` |
-| `POST /api/answers` | body `{"text": "...", "question": "..."}`; the local model answers about the text. A `block` decision returns `403` before the answering model is called (the classifier may already have read the first 2,000 characters, see the note under the action table) | `201` |
+| `POST /api/answers` | body `{"text": "...", "question": "..."}`; the local model answers about the text. A device with no tailkeep grant gets `403`. A `block` decision returns `403` before the answering model is called (the classifier may already have read the first 2,000 characters, see the note under the action table) | `201` |
 | `GET /api/audit-entries` | entries newest first, filtered by the caller's `view`; `?limit=` defaults to 50, maximum 500. The page polls it every 2 seconds | `200` |
 
 Errors are always `{"error": "<code>", "reason": "<text>"}` with the matching status: `400`, `403`, `404`, `413`, `500` if a page cannot be built, or `502` when the local model did not answer.
@@ -223,10 +221,11 @@ The model check looks for sensitive content that patterns cannot recognize: cust
 
 - **Length limit: 2,000 characters.** Longer text is classified on the first 2,000 characters only. The result says so in its reason, but the scan response does not show that note, so treat the limit as fixed. The detectors still read the whole text.
 - **It is best effort.** The detectors are the guarantee. The model check can only make a decision stricter: a `clean` answer never overrides a detector finding, and the model is not asked at all when a detector already found something. Text can contain instructions aimed at the classifier, so the text is wrapped in markers with an instruction to treat it as data, and any run of three `<` or `>` in the text is shortened so it cannot forge a marker. This lowers the risk. It does not remove it: see the injection sample in [Why this model](#why-this-model).
+- **It can be talked out of a verdict.** The classifier is a model, and text inside the input can change its answer (prompt injection). In the live run an injection sample that told it to answer clean did exactly that. So it is never the only protection: the detectors run first, and block and redact decisions on found secrets do not depend on it.
 - **`unknown` is its own result.** A timeout (20 seconds by default), a transport error, a bad status or an answer that cannot be parsed gives `unknown`, with a cause in the reason. It is never recorded as `clean` and never as `sensitive`. The policy field `on_unknown` decides what `unknown` does, and defaults to `block`.
 - **`sensitive` with no spans.** If only the model flagged the text there is nothing to redact, so a `redact` action becomes `block` with the reason "flagged by the local model; nothing specific to redact".
 - **The model's own explanation is dropped.** Its free-text reason can repeat the text it read, so it goes into no response, no audit entry and no message. Only the label and the fixed category names are kept.
-- **It runs only when needed.** The web app asks the model only when the caller's policy has `model_check` on and no detector found anything. On the Aperture path the check is off by default, because a call took about 2.8 to 5.3 seconds warm through the model node in an earlier test (8.4 s cold; the direct run in [Why this model](#why-this-model) was faster, with a median of 1.35 s), while Aperture recommends a hook timeout of 0.5 to 2 seconds.
+- **It runs only when needed.** The web app asks the model only when the caller's policy has `model_check` on and no detector found anything. On the Aperture path the check is off by default, because a call took about 2.8 to 5.3 seconds warm through the model node in an earlier test (8.4 s cold; the run through the model node in [Why this model](#why-this-model) had a median of 1.11 s per sample and about 6.8 s on the first call), while Aperture recommends a hook timeout of 0.5 to 2 seconds.
 
 The classifier and the answers are served by the local model through the model node, never directly from `127.0.0.1`.
 
@@ -256,10 +255,12 @@ How the hook behaves:
 
 - **Endpoint.** `POST /aperture/pre-request` on its own port, 8443 by default (`--hook-port`), served by a separate listener that has only this route. On port 443 a JSON `POST` to that path gets `404` (a request that fails the Host or cross-site checks gets `403` first).
 - **Callers.** Only a caller holding the `hook` capability gets an answer; anyone else gets `403` naming the caller, and the refusal is audited. Aperture's `apikey` is not needed: tailkeep ignores whatever value is sent and identifies Aperture through WhoIs (that Aperture accepts a hook without a key is not tested live).
-- **End user.** The hook payload carries the end user's `stable_node_id` and `login_name`. tailkeep looks the device up by that ID and reads the policy that device holds toward the guard. It checks that the device's login (or, for a tagged device, its tags sorted and joined with commas, which is what Aperture's documentation says it sends; not yet confirmed against a live Aperture, UNPROVEN) matches `login_name`. A mismatch is blocked and audited as an integrity error.
+- **End user.** The hook payload carries the end user's `stable_node_id` and `login_name`. tailkeep looks the device up by that ID and reads the policy that device holds toward the guard. It checks that the device's login (or, for a tagged device, its tags sorted and joined with commas, which is what Aperture's documentation says it sends; confirmed live: a tagged device's hook audit entry names its tag as the end user) matches `login_name`. A mismatch is blocked and audited as an integrity error.
 - **Visibility.** The guard can only look up devices it can see, which depends on network grants. Every person whose Aperture traffic goes through the hook needs at least the grant from their devices to `tag:tailkeep:443`. A device the guard cannot see is blocked with the reason "device not visible to tailkeep".
 - **What is scanned.** The whole `request_body`, not only the last message: every string value in the JSON is scanned, so a secret in a tool-result message (for example a `.env` file an agent read) is caught even though nobody typed it. This works the same for OpenAI chat, OpenAI Responses and Anthropic message bodies. Numbers are written back exactly as received. The `user_message` field is scanned too. A `redact` action whose only finding is in `user_message` becomes `block`, because only `request_body` is rewritten.
 - **Answers.** `allow`; `modify`, with the full body and each finding replaced by `[REDACTED:<detector>]` (only for `redact`); or `block` with `status_code` 451 and a message that names the detector or category, never the secret. Hook answers are sent with HTTP status 200.
+- **Measured live.** Through Aperture, 20 requests per series. A blocked request had a median of 312 ms and a p95 of 315 ms. A clean request (includes the cloud model's answer) had a median of 1.48 s and a p95 of 1.96 s. The hook handler took 0 to 1 ms, far under the 2 second timeout, so nearly all of the 312 ms is the trip through Aperture.
+- **Also confirmed live.** Aperture returns HTTP 451 with `error.type` `guardrail_blocked` to the client. A `reroute` user gets the "Send this request to <local model> instead." message and a `block` user gets the block without it. A key that appears only in an earlier tool-result message is blocked. The hook port is closed at the network layer, and tailkeep answers `403` when the network allows the connection. With grants, the `reroute` user gets local-model answers, the `block` user gets `403` on answers, and the model node refuses callers without `llm`.
 - **Request size.** At most 10 MB. A larger request gets `413`, audited.
 - **Requests already going to the local model.** This is decided by the target provider in the hook payload, matched to `--local-provider` (default `local`), not by model name. That flag must name the self-hosted provider, the one pointing at tailkeep-llm; naming a cloud provider would exempt it from redact and reroute. For those requests `allow`, `redact` and `reroute` answer `allow` unchanged, since the text stays on the tailnet. `block` still blocks.
 
@@ -283,7 +284,7 @@ Known limits on this path:
 
 - **Protection in two places on the hook.** First, the tailnet policy opens port 8443 on `tag:tailkeep` to `tag:aperture` alone, so no other device can open a connection to it. Second, the handler looks up the caller with WhoIs and refuses anyone without the `hook` capability, whatever the network let through. A person is stopped by either one on its own, and a mistake in one is covered by the other. The grant is about reachability; the capability is about permission. The model node is built the same way: port 443 on `tag:tailkeep-llm`, then the `llm` capability.
 - **No API keys.** Users and Aperture do not present a key. The only secrets are the two tagged auth keys, which are read from environment variables on the first start of each node and never logged.
-- **Deny by default.** No capability means `block`. An unknown caller, a lookup error or a malformed capability on the hook or model node is a `403`. On the web app a caller who cannot be identified gets `403` on scans and answers.
+- **Deny by default.** No capability means `block`. An unknown caller, a lookup error or a malformed capability on the hook or model node is a `403`. On the web app a caller who cannot be identified gets `403` on scans and answers, and a caller with no grant gets `403` on answers and a detector-only scan.
 - **Strictest wins.** When grants overlap, protection fields take the strictest value and permissions add up, so a new grant cannot weaken protection by accident.
 - **Unknown stays unknown.** A model failure is recorded as `unknown`, and the policy field `on_unknown` decides.
 - **The model node serves inference only.** It forwards `POST /v1/chat/completions`, `GET /v1/models` and `POST /api/chat`. Every other path, including Ollama's pull, delete, create, copy and push, is `404`, so a granted caller can run the model but never change which models exist. The caller check runs first, so a caller without the `llm` capability learns nothing about which paths exist. Ollama listens on `127.0.0.1` only.
@@ -321,7 +322,7 @@ go test ./...
   go test -tags integration ./integration/
   ```
   They are not part of `go test ./...`. The classifier check is a separate integration test in `internal/classify`; it needs `TAILKEEP_CLASSIFY_URL` to point at an Ollama address (see [Why this model](#why-this-model)).
-- **Public-repository check.** `go test -tags hygiene ./...` scans every tracked file for banned words, credential-looking strings, Tailscale addresses, real `.ts.net` names, emails other than `@example.com`, and a private list of values that is never written in the repository. That list comes from the environment variable `TAILKEEP_HYGIENE_PRIVATE`; without it, that one rule is skipped and a notice says so. The list must contain the owner name exactly as the `LICENSE` copyright line spells it, or that line is reported. Findings print the file, line and rule, never the matched text. If a file's own name is the problem, it prints `<tracked file #N>`; resolve it with `git ls-files | sed -n Np`, replacing `N`. The check cannot see commit metadata, git history, images and video (the owner checks every frame of anything under `docs/media/`), binary or UTF-16 files, look-alike characters, or files that are not tracked or staged yet.
+- **Public-repository check.** `go test -tags hygiene ./...` scans every tracked file for banned words, credential-looking strings, Tailscale addresses, real `.ts.net` names, emails other than `@example.com`, and a private list of values that is never written in the repository. That list comes from the environment variable `TAILKEEP_HYGIENE_PRIVATE`; without it, that one rule is skipped and a notice says so. The list must contain the owner name exactly as the `LICENSE` copyright line spells it, or that line is reported. Findings print the file, line and rule, never the matched text. If a file's own name is the problem, it prints `<tracked file #N>`; resolve it with `git ls-files | sed -n Np`, replacing `N`. The check cannot see commit metadata, git history, images and video, binary or UTF-16 files, look-alike characters, or files that are not tracked or staged yet.
 - **Mutation testing** uses agentgates. A fresh clone needs the Go grammar first (`npx --no-install adg lang add go`):
   ```sh
   npx --no-install adg mutate --paths internal/detect/detect.go internal/policy/policy.go --command "go test ./..." --max 200
@@ -338,16 +339,17 @@ go test ./...
 
 The local model is `granite4.1:3b`, served by Ollama. The model check was tried on 20 labelled texts, each 2,000 characters or less: 10 sensitive (customer records, personal details, internal hostnames and infrastructure, unreleased figures, and one text that tells the classifier to answer "clean") and 10 clean (ordinary code, documentation that mentions "API key" or "password" without containing one, public examples). No sample is only a credential, since the detectors own those. The test is `TestClassifierCheck` in `internal/classify`.
 
-These runs went directly to the local Ollama, not through the model node. The official run through the model node is pending.
+Runs 1 and 2 went directly to the local Ollama. Run 3 went through the model node.
 
 | Run | Prompt | Correct | False positives | False negatives | Recall on the 10 sensitive | Median per call |
 |---|---|---|---|---|---|---|
 | 1 | first version | 15 of 20 | 0 | 5 | 5 of 10 | 1.46 s |
-| 2 (latest) | category names added | 17 of 20 | 0 | 3 | 7 of 10 | 1.35 s |
+| 2 | category names added | 17 of 20 | 0 | 3 | 7 of 10 | 1.35 s |
+| 3 (through the model node) | current | 17 of 20 | 0 | 3 | 7 of 10 | 1.11 s |
 
-In run 2 the model missed the customer records, the internal infrastructure text and the injection sample. Recall on sensitive text is 7 of 10, so the model check misses things. It raised no false alarm on the 10 clean samples in either run, which is a small sample. By design the model check can only make a decision stricter, so a miss leaves the detectors' result in place; do not rely on it for completeness. The first (cold) call was slow: 7.05 s in run 1 and 5.6 s in run 2. The model is not fully deterministic at temperature 0, so treat single runs as indicative.
+In run 2 the model missed the customer records, the internal infrastructure text and the injection sample. Recall on sensitive text is 7 of 10, so the model check misses things. It raised no false alarm on the 10 clean samples in either run, which is a small sample. By design the model check can only make a decision stricter, so a miss leaves the detectors' result in place; do not rely on it for completeness. The first (cold) call was slow: 7.05 s in run 1, 5.6 s in run 2 and about 6.8 s in run 3, while the model loads. The model is not fully deterministic at temperature 0, so treat single runs as indicative.
 
-**The injection sample** (a sensitive text that tells the classifier to answer "clean") was classified `clean` in both runs. The model check can be talked out of a verdict by the text it reads. That is one reason it can only tighten a decision, and why the detectors, not the model, are the guarantee for credentials.
+**The injection sample** (a sensitive text that tells the classifier to answer "clean") was classified `clean` in all three runs. The model check can be talked out of a verdict by the text it reads. That is one reason it can only tighten a decision, and why the detectors, not the model, are the guarantee for credentials.
 
 Timing through the model node, from an earlier test on one machine with a model-node hop (guard to model node to Ollama, GPU, 4,096-token context, five runs per case): 2,000 clean characters took about 3.1 s warm; a text with a fake key took 4.3 to 5.3 s; the first call after load took 8.4 s. A fake key inside 2,000 characters was flagged in 4 of 5 runs and in 0 of 5 runs at 6,000 characters, which is why the limit is 2,000. That test ran before the classifier code was written, with a different prompt, so it says little about the current classifier; the 20-sample table above is the better guide.
 
@@ -365,7 +367,7 @@ Timing through the model node, from an earlier test on one machine with a model-
 
 **`doctor` or `serve` fails to start a node.** On the first start both `TS_AUTHKEY_GUARD` and `TS_AUTHKEY_LLM` must be set, to reusable, pre-approved, tagged keys. An ephemeral node is deleted when it stops, so a restart needs a new registration and a key that can be used again; a key created without "Reusable" fails the second start with "not valid". Also check that no machine with those names already exists.
 
-**HTTPS certificates and MagicDNS.** Both must be enabled in the admin console (DNS page). The first certificate for each name takes about 35 seconds; run `doctor` once so they are fetched before the first request. If the certificate authority rate limits your tailnet, wait and run `doctor` again. Machine names become public in certificate transparency logs once certificates are issued; check they are names you are happy to publish.
+**HTTPS certificates and MagicDNS.** Both must be enabled in the admin console (DNS page). The first certificate for each name takes about 31 to 35 seconds; run `doctor` once so they are fetched before the first request. If the certificate authority rate limits your tailnet, wait and run `doctor` again. Machine names become public in certificate transparency logs once certificates are issued; check they are names you are happy to publish.
 
 **403 from the web app.** The `Host` header must be the bare MagicDNS name of the guard. An IP address, a short name or a proxy that rewrites `Host` is refused. A `POST` must also be `Content-Type: application/json`.
 
@@ -387,7 +389,7 @@ Timing through the model node, from an earlier test on one machine with a model-
 
 **Aperture's reply is a 451 you did not expect.** The message names the detector or category. Check the end user's action in the policy file. A `reroute` user always sees a block with guidance (see [Using it with Aperture](#using-it-with-aperture)).
 
-**Policy changes take a while to apply.** Grants are read on each request, so no restart is needed, but a change in the admin console takes some time to reach the nodes. The time was not measured for this README.
+**Policy changes take a while to apply.** Grants are read on each request, so no restart is needed, but a change in the admin console takes some time to reach the nodes. In one live check it took about 1 to 2 seconds (approximate, one check).
 
 **Running `doctor` and `serve` together.** Both use the same state directory and node state. Stop `serve` before running `doctor`.
 

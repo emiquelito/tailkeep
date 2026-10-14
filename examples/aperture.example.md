@@ -100,8 +100,9 @@ Add the hook under `hooks`.
   not Aperture, which Aperture treats the same way. With `fail_open` a hook
   failure would let requests through unchecked, so do not use it.
 - **timeout.** Aperture recommends 0.5 to 2 seconds for a pre_request hook.
-  Without the model check the hook took about 1 ms in the handler in testing,
-  so 2 seconds leaves a wide margin. Do not turn on `model_check` for the hook
+  Without the model check the hook handler took 0 to 1 ms per request live; a
+  blocked request took a median of 312 ms end to end through Aperture, so
+  2 seconds leaves a wide margin. Do not turn on `model_check` for the hook
   path with this timeout: through the model node a local model call took about
   2.8 to 5.3 seconds when warm and about 8.4 seconds when cold in testing.
 - **Authentication.** tailkeep identifies Aperture from the tailnet, so no

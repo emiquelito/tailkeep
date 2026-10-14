@@ -46,7 +46,7 @@ have a written reason:
 - web scan: loading the policy with `HookPath` instead of `WebPath`. It
   survived while the scan skipped the model check. Closed once the web path
   asked the classifier: `TestWebPathModelCheckDefaultIsOn` fails on that mutant, because a
-  caller whose capability does not mention `model_check` must be classified.
+  caller with a grant that does not mention `model_check` must be classified.
 
 ## Mutation run notes: server, doctor, serve
 
