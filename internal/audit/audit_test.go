@@ -422,3 +422,34 @@ func TestOpenTightensAnExistingBroadFile(t *testing.T) {
 		t.Errorf("content changed: %q", data)
 	}
 }
+
+// On a hook row the caller is Aperture, not a person, so the self view
+// matches the end user only. On other paths the caller is the person.
+func TestSelfViewOfHookRowsMatchesEndUserOnly(t *testing.T) {
+	l := New(nil, nil)
+	for _, u := range []identity.Identity{alice, bob} {
+		e := NewEntry(Hook, ci)
+		e.SetEndUser(u)
+		e.Action = policy.Block
+		l.Log(e)
+	}
+	if n := len(l.Entries(policy.Self, ci, MaxLimit)); n != 0 {
+		t.Errorf("the hook caller sees %d hook rows, want 0", n)
+	}
+	if n := len(l.Entries(policy.Self, alice, MaxLimit)); n != 1 {
+		t.Errorf("alice sees %d hook rows, want 1", n)
+	}
+	if n := len(l.Entries(policy.All, ci, MaxLimit)); n != 2 {
+		t.Errorf("view all sees %d, want 2", n)
+	}
+}
+
+// On llm rows the caller is the person, so the self view still matches it.
+func TestSelfViewOfLLMRowsMatchesCaller(t *testing.T) {
+	l := New(nil, nil)
+	l.Log(NewEntry(LLM, alice))
+	l.Log(NewEntry(LLM, bob))
+	if n := len(l.Entries(policy.Self, alice, MaxLimit)); n != 1 {
+		t.Errorf("alice sees %d llm rows, want 1", n)
+	}
+}

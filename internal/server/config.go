@@ -166,11 +166,11 @@ var LLMTimeouts = Timeouts{
 // bound a stuck peer. They still let a 10 MB body arrive over a slow link
 // (30 s is about 350 KB/s). The write limit is longer than the read limit
 // because net/http counts it from the end of the headers, so it covers the
-// body read, the scan and the answer.
+// body read (30 s), the classifier (20 s) and the answer, with margin.
 var HookTimeouts = Timeouts{
 	ReadHeader:     5 * time.Second,
 	Read:           30 * time.Second,
-	Write:          45 * time.Second,
+	Write:          60 * time.Second,
 	Idle:           time.Minute,
 	MaxHeaderBytes: 32 << 10,
 }

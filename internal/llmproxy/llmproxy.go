@@ -28,8 +28,8 @@ const MaxBody = 10 << 20
 // endpoints (pull, delete, create, copy, push, tags), so a granted caller can
 // run a model but never change which models exist.
 //
-// /v1/chat/completions is the only chat form: in the spike, Aperture sent
-// that exact path. The form without /v1 is not served. /v1/messages is not
+// /v1/chat/completions is the only chat form: Aperture sends that
+// exact path. The form without /v1 is not served. /v1/messages is not
 // served either, because the demo uses OpenAI chat completions.
 var allowed = map[string]bool{
 	"POST /v1/chat/completions": true,

@@ -29,7 +29,7 @@ const downloadPage = "https://ollama.com/download"
 // Provenance, stated plainly: the Linux command and the download page are
 // the ones Ollama documents (the install script URL on its download page).
 // The Windows and macOS page URLs follow the same pattern on the download
-// page, and are to be confirmed by the owner in the live session. Looked at
+// page, and have not been checked against a real install. Looked at
 // on 2026-10-13 only through a summarizing page fetch, not in a browser;
 // nothing was run.
 var installRoutes = map[string]string{

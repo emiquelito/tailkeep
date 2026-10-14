@@ -59,7 +59,10 @@ the Anthropic messages format, so `anthropic_messages` is not supported there.
 The model node only serves `POST /v1/chat/completions`, `GET /v1/models` and
 `POST /api/chat`, so the local provider is for OpenAI chat completions
 requests. The name `local` is the default for `tailkeep serve
---local-provider`. If you name the provider something else, pass that name.
+--local-provider`. That flag must name the self-hosted provider, the one
+pointing at tailkeep-llm. If you name the provider something else, pass that
+name. Never name a cloud provider there: it would be exempt from redact and
+reroute.
 
 ### One model under two providers
 
@@ -99,8 +102,8 @@ Add the hook under `hooks`.
 - **timeout.** Aperture recommends 0.5 to 2 seconds for a pre_request hook.
   Without the model check the hook took about 1 ms in the handler in testing,
   so 2 seconds leaves a wide margin. Do not turn on `model_check` for the hook
-  path with this timeout: a local model call takes about 3 to 4 seconds when
-  warm.
+  path with this timeout: through the model node a local model call took about
+  2.8 to 5.3 seconds when warm and about 8.4 seconds when cold in testing.
 - **Authentication.** tailkeep identifies Aperture from the tailnet, so no
   `apikey` is needed. If your Aperture version insists on one, any value is
   accepted and ignored.
@@ -151,9 +154,9 @@ Notes:
 
 - Model patterns are `provider/model`. A pattern must name a provider that
   is declared above.
-- In the tailnet policy file (not Aperture's own configuration), a grant needs
-  a `dst`, for example `"dst": ["tag:aperture"]`; without it the grant applies
-  to nothing. The tailnet policy for tailkeep itself (network grants and the
+- These grants belong in Aperture's own configuration, in its `grants`
+  section, and have no `dst`. They do not go in the tailnet policy file. The
+  tailnet policy for tailkeep itself (network grants and the
   tailkeep capability for each person) is in `examples/policy.example.hujson`.
 - The hook payload carries the end user's `login_name` and `stable_node_id`.
   tailkeep looks the device up by that stable node ID and checks that its

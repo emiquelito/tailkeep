@@ -220,7 +220,7 @@ func (l *Log) Entries(view policy.View, who identity.Identity, limit int) []Entr
 	out := []Entry{}
 	for i := len(l.ring) - 1; i >= 0 && len(out) < limit; i-- {
 		e := l.ring[i]
-		mine := key != "" && (e.callerKey == key || e.endUserKey == key)
+		mine := key != "" && (e.endUserKey == key || (e.Path != Hook && e.callerKey == key)) // on hook rows the caller is Aperture, not the person
 		if view == policy.All || mine {
 			out = append(out, e)
 		}

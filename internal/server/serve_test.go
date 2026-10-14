@@ -291,7 +291,7 @@ func TestServersGetTheirOwnLimits(t *testing.T) {
 	if got, want := of(llmServer), (limits{10 * time.Second, time.Minute, 0, 2 * time.Minute, 32 << 10}); got != want {
 		t.Errorf("model node limits %+v, want %+v", got, want)
 	}
-	if got, want := of(hookServer), (limits{5 * time.Second, 30 * time.Second, 45 * time.Second, time.Minute, 32 << 10}); got != want {
+	if got, want := of(hookServer), (limits{5 * time.Second, 30 * time.Second, 60 * time.Second, time.Minute, 32 << 10}); got != want {
 		t.Errorf("hook limits %+v, want %+v", got, want)
 	}
 }

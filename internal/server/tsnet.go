@@ -51,7 +51,7 @@ func (n *tsnetNode) Local() (LocalAPI, error) {
 	return lc, nil
 }
 
-// upTimeout is how long a node may take to come up. In the spike a node was
+// upTimeout is how long a node may take to come up. In early trials a node was
 // up in about 1.4 s, so this only matters when something is wrong.
 const upTimeout = 2 * time.Minute
 

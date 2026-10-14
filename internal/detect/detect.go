@@ -77,7 +77,7 @@ var detectors = []detector{
 	// Only the password is the finding, so redaction keeps the rest of the
 	// URL. The user may be empty (redis style) and the password runs to the
 	// last "@" before the host, so a password containing "@" is covered.
-	// A "/" in the password ends the match (see the register).
+	// A "/" in the password ends the match (a known limit: a password with "/" is only partly matched).
 	{"conn_string_password", re(`[A-Za-z][A-Za-z0-9+.-]*://[^\s:/@]*:([^\s/]+)@[^\s/]+`, 1)},
 }
 

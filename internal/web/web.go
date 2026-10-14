@@ -205,6 +205,10 @@ func (h *handler) scan(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, identity.Identity{}, start, http.StatusForbidden, audit.ReasonUnidentified)
 		return
 	}
+	if id.CapProblem != "" { // a malformed capability is denied, not served
+		h.refuse(w, id, start, http.StatusForbidden, audit.ReasonMalformedCap)
+		return
+	}
 	pol := id.Policy(identity.WebPath) // load policy
 	var req scanRequest
 	if status, reason := readBody(w, r, &req); status != 0 {

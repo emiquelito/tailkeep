@@ -1,0 +1,146 @@
+// Example tailnet policy file for tailkeep. HuJSON: comments and trailing
+// commas are allowed.
+//
+// Every login, tag and model name is a placeholder. Merge the parts you need
+// into your own policy file; do not replace a working policy with this one.
+// Network grants (the "ip" field) decide who can connect. App grants (the
+// "app" field) decide what each caller may do once connected. tailkeep reads
+// its policy from these app grants through WhoIs; the policy file is its only
+// source of policy.
+{
+	// Tags. Each machine takes its tag from the auth key it joins with, or
+	// from the admin console. A device cannot give itself a tag: the control
+	// plane accepts a tag only from someone listed in tagOwners.
+	"tagOwners": {
+		"tag:tailkeep":     ["alice@example.com"], // the guard node
+		"tag:tailkeep-llm": ["alice@example.com"], // the model node
+		"tag:aperture":     ["alice@example.com"], // the Aperture instance
+		"tag:ci-agent":     ["alice@example.com"], // a tagged device with no user (an agent or a CI job)
+	},
+
+	"grants": [
+		// --- Network grants: who can connect to what ---
+
+		// People and the tagged agent reach the web app on the guard. This
+		// also lets the guard see their devices, which the hook path needs
+		// to find the person behind an Aperture request. A device the guard
+		// cannot see is blocked with "device not visible to tailkeep".
+		{
+			"src": ["alice@example.com", "bob@example.com", "tag:ci-agent"],
+			"dst": ["tag:tailkeep"],
+			"ip":  ["tcp:443"],
+		},
+
+		// People and the tagged agent reach Aperture. All ports are allowed
+		// here; narrowing this to specific ports is untested.
+		{
+			"src": ["alice@example.com", "bob@example.com", "tag:ci-agent"],
+			"dst": ["tag:aperture"],
+			"ip":  ["*"],
+		},
+
+		// The hook port (the default of --hook-port). Only Aperture is
+		// granted it. Nobody else gets 8443, so a person cannot even connect
+		// to the hook. The hook handler checks the caller again with WhoIs.
+		{
+			"src": ["tag:aperture"],
+			"dst": ["tag:tailkeep"],
+			"ip":  ["tcp:8443"],
+		},
+
+		// Aperture reaches the model node, for its self-hosted provider.
+		{
+			"src": ["tag:aperture"],
+			"dst": ["tag:tailkeep-llm"],
+			"ip":  ["tcp:443"],
+		},
+
+		// The guard reaches the model node, to classify text and to answer
+		// questions.
+		{
+			"src": ["tag:tailkeep"],
+			"dst": ["tag:tailkeep-llm"],
+			"ip":  ["tcp:443"],
+		},
+
+		// --- App grants: what each caller may do ---
+		// The capability name is github.com/emiquelito/tailkeep. The
+		// destination is the node the caller talks to, because WhoIs returns
+		// the capabilities a caller holds toward that node.
+
+		// alice: sensitive text is sent to the local model instead of a
+		// cloud model; she sees every audit entry.
+		{
+			"src": ["alice@example.com"],
+			"dst": ["tag:tailkeep"],
+			"app": {
+				"github.com/emiquelito/tailkeep": [
+					{"action": "reroute", "view": "all"},
+				],
+			},
+		},
+
+		// bob: sensitive text is blocked; he sees only his own audit entries
+		// (view defaults to "self").
+		{
+			"src": ["bob@example.com"],
+			"dst": ["tag:tailkeep"],
+			"app": {
+				"github.com/emiquelito/tailkeep": [
+					{"action": "block"},
+				],
+			},
+		},
+
+		// The tagged agent: sensitive text is blocked. It has no llm
+		// capability, so it cannot use the model node.
+		{
+			"src": ["tag:ci-agent"],
+			"dst": ["tag:tailkeep"],
+			"app": {
+				"github.com/emiquelito/tailkeep": [
+					{"action": "block"},
+				],
+			},
+		},
+
+		// Aperture may call the hook on the guard. This grant sets only
+		// "hook", so it takes no position on action or the other protection
+		// fields.
+		{
+			"src": ["tag:aperture"],
+			"dst": ["tag:tailkeep"],
+			"app": {
+				"github.com/emiquelito/tailkeep": [
+					{"hook": true},
+				],
+			},
+		},
+
+		// Aperture may use the model node.
+		{
+			"src": ["tag:aperture"],
+			"dst": ["tag:tailkeep-llm"],
+			"app": {
+				"github.com/emiquelito/tailkeep": [
+					{"llm": true},
+				],
+			},
+		},
+
+		// The guard may use the model node.
+		{
+			"src": ["tag:tailkeep"],
+			"dst": ["tag:tailkeep-llm"],
+			"app": {
+				"github.com/emiquelito/tailkeep": [
+					{"llm": true},
+				],
+			},
+		},
+
+		// Aperture's own grants (model access and send_hooks, under
+		// tailscale.com/cap/aperture) are not part of this file. They go in
+		// Aperture's configuration. See aperture.example.md in this folder.
+	],
+}

@@ -99,19 +99,22 @@ func ParseCaps(cm tailcfg.PeerCapMap) ([]Cap, error) {
 // field that no grant set falls back to the strict default: action block and
 // on_unknown block. So a grant that only sets hook still gets action block,
 // but it does not force block over another grant that sets action allow.
-// model_check that no grant set is true on the web path and false on the
-// hook path.
+// A grant that leaves model_check unset counts as the path default (true on
+// the web path, false on the hook path) in the any-true merge, so adding a
+// grant never turns the model check off.
 func PolicyFor(caps []Cap, path Path) policy.Policy {
 	if len(caps) == 0 {
 		return denyPolicy(path)
 	}
 	grants := make([]policy.Policy, len(caps))
-	var actionSet, unknownSet, checkSet bool
+	var actionSet, unknownSet bool
 	for i, c := range caps {
 		grants[i] = c.policy()
+		if c.ModelCheck == nil { // no opinion: the path default joins the any-true merge
+			grants[i].ModelCheck = path != HookPath
+		}
 		actionSet = actionSet || c.Action != nil
 		unknownSet = unknownSet || c.OnUnknown != nil
-		checkSet = checkSet || c.ModelCheck != nil
 	}
 	out := policy.Merge(grants...)
 	if !actionSet {
@@ -119,9 +122,6 @@ func PolicyFor(caps []Cap, path Path) policy.Policy {
 	}
 	if !unknownSet {
 		out.OnUnknown = policy.Block
-	}
-	if !checkSet {
-		out.ModelCheck = path != HookPath
 	}
 	return out
 }

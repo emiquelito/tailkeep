@@ -378,8 +378,8 @@ func TestFakeContextEndsDuringDelay(t *testing.T) {
 	}
 }
 
-// A real model call is not deterministic even at temperature 0 (the spike
-// saw one miss in five). Two replies that disagree must each be reported as
+// A real model call is not deterministic even at temperature 0 (one miss in
+// five was seen in early trials). Two replies that disagree must each be reported as
 // given, with no caching or smoothing in between.
 func TestDisagreeingRepliesAreNotSmoothed(t *testing.T) {
 	n := 0

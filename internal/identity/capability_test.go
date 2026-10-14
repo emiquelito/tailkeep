@@ -161,7 +161,12 @@ func TestPolicyFor(t *testing.T) {
 		{"model_check unset, unknown path", []Cap{{Action: redact}}, Path(""), policy.Policy{Action: policy.Redact, OnUnknown: policy.Block, View: policy.Self, ModelCheck: true}},
 		{"model_check true, hook", []Cap{{Action: redact, ModelCheck: ptr(true)}}, HookPath, policy.Policy{Action: policy.Redact, OnUnknown: policy.Block, View: policy.Self, ModelCheck: true}},
 		{"model_check false, web", []Cap{{Action: redact, ModelCheck: ptr(false)}}, WebPath, policy.Policy{Action: policy.Redact, OnUnknown: policy.Block, View: policy.Self}},
-		{"model_check false next to unset, web", []Cap{{ModelCheck: ptr(false)}, {Action: redact}}, WebPath, policy.Policy{Action: policy.Redact, OnUnknown: policy.Block, View: policy.Self}},
+		{"model_check false next to unset, web", []Cap{{ModelCheck: ptr(false)}, {Action: redact}}, WebPath, policy.Policy{Action: policy.Redact, OnUnknown: policy.Block, View: policy.Self, ModelCheck: true}},
+		{"model_check false next to unset, hook", []Cap{{ModelCheck: ptr(false)}, {Action: redact}}, HookPath, policy.Policy{Action: policy.Redact, OnUnknown: policy.Block, View: policy.Self}},
+		{"block then llm with model_check false, web", []Cap{{Action: block}, {LLM: true, ModelCheck: ptr(false)}}, WebPath, policy.Policy{Action: policy.Block, OnUnknown: policy.Block, View: policy.Self, ModelCheck: true, LLM: true}},
+		{"block then llm with model_check false, hook", []Cap{{Action: block}, {LLM: true, ModelCheck: ptr(false)}}, HookPath, policy.Policy{Action: policy.Block, OnUnknown: policy.Block, View: policy.Self, LLM: true}},
+		{"all explicit false, web", []Cap{{ModelCheck: ptr(false)}, {ModelCheck: ptr(false)}}, WebPath, policy.Policy{Action: policy.Block, OnUnknown: policy.Block, View: policy.Self}},
+		{"explicit true next to false, web", []Cap{{ModelCheck: ptr(false)}, {ModelCheck: ptr(true)}}, WebPath, policy.Policy{Action: policy.Block, OnUnknown: policy.Block, View: policy.Self, ModelCheck: true}},
 		{"model_check false and true, any true wins", []Cap{{ModelCheck: ptr(false)}, {ModelCheck: ptr(true)}}, HookPath, policy.Policy{Action: policy.Block, OnUnknown: policy.Block, View: policy.Self, ModelCheck: true}},
 
 		// Strictest wins across grants.
@@ -206,7 +211,7 @@ func TestPolicyForNeverWeakerThanAnyGrant(t *testing.T) {
 	for _, caps := range sets {
 		for _, path := range []Path{WebPath, HookPath} {
 			got := PolicyFor(caps, path)
-			actionSet, unknownSet, checkSet, anyTrue := false, false, false, false
+			actionSet, unknownSet, anyTrue := false, false, false
 			for _, c := range caps {
 				if c.Action != nil {
 					actionSet = true
@@ -220,8 +225,9 @@ func TestPolicyForNeverWeakerThanAnyGrant(t *testing.T) {
 						t.Fatalf("%+v: on_unknown %s weaker than a grant's block", caps, got.OnUnknown)
 					}
 				}
-				if c.ModelCheck != nil {
-					checkSet = true
+				if c.ModelCheck == nil { // no opinion counts as the path default
+					anyTrue = anyTrue || path != HookPath
+				} else {
 					anyTrue = anyTrue || *c.ModelCheck
 				}
 			}
@@ -231,7 +237,7 @@ func TestPolicyForNeverWeakerThanAnyGrant(t *testing.T) {
 			if !unknownSet && got.OnUnknown != policy.Block {
 				t.Fatalf("%+v: no grant set on_unknown, got %s, want block", caps, got.OnUnknown)
 			}
-			if checkSet && got.ModelCheck != anyTrue {
+			if got.ModelCheck != anyTrue {
 				t.Fatalf("%+v: model_check %v, want %v", caps, got.ModelCheck, anyTrue)
 			}
 			if err := got.Validate(); err != nil {

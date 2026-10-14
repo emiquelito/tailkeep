@@ -47,8 +47,8 @@ const (
 	ExitFailed = 1
 )
 
-// certTimeout is generous: the first certificate took about 35 s in the
-// spike.
+// certTimeout is generous: the first certificate took about 35 s in
+// early trials.
 const certTimeout = 3 * time.Minute
 
 // Run prints one line per check and returns ExitOK, or ExitFailed after

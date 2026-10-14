@@ -183,7 +183,6 @@ func TestScanDecisionsFollowThePolicyOfTheCaller(t *testing.T) {
 		{"alice", policy.Reroute}, {"bob", policy.Block}, {"ci", policy.Block},
 		{"redactor", policy.Redact}, {"permissive", policy.Allow},
 		{"aperture", policy.Block}, // a hook-only grant has no action: strictest
-		{"badcap", policy.Block},   // the problem wins over the caps it came with
 	} {
 		r := newRig(t)
 		rec := r.scan(tc.caller, text)
@@ -790,5 +789,35 @@ func TestJSONResponsesAreNotCached(t *testing.T) {
 		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
 			t.Errorf("%s: Cache-Control = %q", name, got)
 		}
+	}
+}
+
+// A malformed capability is denied on scan like on answers: 403, audited with
+// the malformed reason, and no classifier call.
+func TestScanDeniesMalformedCapability(t *testing.T) {
+	r := newRig(t)
+	rec := r.scan("badcap", "hello world")
+	checkError(t, rec, http.StatusForbidden, "forbidden")
+	if !strings.Contains(rec.Body.String(), "malformed capability (deny)") {
+		t.Errorf("body %s", rec.Body)
+	}
+	got := r.audit.Entries(policy.All, callers["alice"], 10)
+	if len(got) != 1 || got[0].Reason != audit.ReasonMalformedCap || got[0].Action != audit.Denied {
+		t.Fatalf("audit entries %+v", got)
+	}
+	if len(r.cls.calls) != 0 {
+		t.Errorf("classifier called %d times", len(r.cls.calls))
+	}
+}
+
+// The denial comes before the body is read, so a bad body from a malformed
+// caller is still 403 with the malformed reason, not 400.
+func TestScanDeniesMalformedCapabilityBeforeReadingBody(t *testing.T) {
+	r := newRig(t)
+	rec := r.do(req{caller: "badcap", method: "POST", path: "/api/scans", body: "{not json"})
+	checkError(t, rec, http.StatusForbidden, "forbidden")
+	got := r.audit.Entries(policy.All, callers["alice"], 10)
+	if len(got) != 1 || got[0].Reason != audit.ReasonMalformedCap {
+		t.Fatalf("audit entries %+v", got)
 	}
 }

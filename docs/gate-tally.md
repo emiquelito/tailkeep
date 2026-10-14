@@ -19,7 +19,7 @@ exist.
 | 6 | 2026-10-13 | coverage-as-gap-finder | `internal/server/serve_test.go` (TestServeWiresEachMuxToItsOwnNode) | Review hand mutant on the server wiring: building the web app's resolver from the model node's local client survived, because both fakes described the same user. The two fakes now describe different users and the page must show the guard's. |
 | 7 | 2026-10-13 | coverage-as-gap-finder | `internal/server/serve_test.go` (TestServersGetTheirOwnLimits) | Review hand mutants: giving the model node the web limits, the web app the model node limits, or a ten-hour header timeout all survived, because the limits were only checked to be above zero. The test now pins every value for both servers. |
 | 8 | 2026-10-13 | coverage-as-gap-finder | `internal/server/ollama_test.go` (TestIsLoopback) | Review hand mutant: treating private addresses as this machine survived, so `--pull-model` could have been sent to a LAN host. Added private IPv4 ranges, the shared carrier range and a unique-local IPv6 case. |
-| 9 | 2026-10-13 | coverage-as-gap-finder | `internal/server/doctor_test.go` (TestDoctorPasses, TestDoctorWhoIsFailures) | adg mutate found 17 survivors in the doctor's real tailnet code, and hand mutants skipping the own-address check and asking for the wrong model node name survived. That code sat behind an interface only the live session used. The interface is gone and the same code now runs against fake nodes. |
+| 9 | 2026-10-13 | coverage-as-gap-finder | `internal/server/doctor_test.go` (TestDoctorPasses, TestDoctorWhoIsFailures) | adg mutate found 17 survivors in the doctor's real tailnet code, and hand mutants skipping the own-address check and asking for the wrong model node name survived. That code sat behind an interface only a real tailnet used. The interface is gone and the same code now runs against fake nodes. |
 | 10 | 2026-10-13 | coverage-as-gap-finder | `internal/server/ollama_test.go` (TestOllamaErrorStatusIsNotOllama) | Review hand mutant: accepting any HTTP status as "Ollama is reachable" survived. Added a test with a 500 answer. |
 | 11 | 2026-10-13 | coverage-as-gap-finder | `internal/server/ollama_test.go` (TestPullModelStreamsProgress, TestAnswersReportsTheTime), `internal/server/serve_test.go` (TestStopReportsARequestThatOutlastsTheWait) | adg mutate after the doctor trim: dropping the JSON Content-Type header and flipping the shutdown error check both survived. The fake Ollama now records the header, and a request held open past the wait shows stop returns the deadline error. |
 | 12 | 2026-10-13 | coverage-as-gap-finder | `internal/web/answer_test.go` (TestNewRequiresClassifierAndAnswerer, TestZeroAnswerCapMeansTheDefault) | adg mutate on the classifier wiring and the answers route: the constructor check for a missing classifier or answerer accepted a config missing only one of them, and a zero answer cap ("use the default") could become "send nothing" without a test noticing. Both now have tests. |
@@ -58,10 +58,10 @@ was one until `TestStopReportsARequestThatOutlastsTheWait` pinned it):
 
 - `upTimeout` (two minutes) and the node close order: values and ordering
   with no observable effect offline; both live only around a real node.
-  Trigger: the live session shows a node that needs longer than two minutes,
+  Trigger: a real tailnet shows a node that needs longer than two minutes,
   or a close-order problem.
 - `tsnet.go` (`StartNode`, `StartNodes`, `Local`): the thin calls to the real
-  library, proven only in the live session. The first-start key rule
+  library, proven only on a real tailnet. The first-start key rule
   (`checkKey`) and the node settings are pure and tested.
 
 ## Mutation run notes: classifier wiring and answers
