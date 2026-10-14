@@ -55,17 +55,6 @@ Running two nodes from one program gives each its own address, tags and grants. 
 
 Measured live on a real tailnet: the hook takes 0 to 1 ms inside tailkeep (about 310 ms end to end through [Aperture](docs/aperture.md#using-it-with-aperture)), a policy change reached tailkeep in about 1 to 2 seconds with no restart ([policy](docs/policy.md#policy-reference)), and the local model check scored 17 of 20 with no false positives ([why this model](docs/detectors-and-model.md#why-this-model)).
 
-## Reading the code
-
-Start with these functions; the rest of the code supports them.
-
-- [internal/web/web.go](internal/web/web.go) `ServeHTTP`: the web app's router, with the Host and cross-site checks. Its `scan` (POST /api/scans) is the whole path of one check.
-- [internal/web/answer.go](internal/web/answer.go) `answer`: POST /api/answers, the same path plus asking the local model; a block returns before the model.
-- [internal/hook/hook.go](internal/hook/hook.go) `handle`: the Aperture hook, from caller and end user to decision and response.
-- [internal/llmproxy/llmproxy.go](internal/llmproxy/llmproxy.go) `(*Proxy).ServeHTTP`: the model node, which checks the `llm` grant, the method and path and the size before it forwards.
-- [internal/policy/policy.go](internal/policy/policy.go) `Merge` and `Decide`: how grants combine into one policy, and how findings turn into an action.
-- [internal/detect/detect.go](internal/detect/detect.go) `Detect`: runs every detector over the text and returns the findings in order.
-
 ## Quick start
 
 You need Go 1.27.1 or later (the version `tailscale.com` requires). Nothing else is needed for the first part.
@@ -103,6 +92,17 @@ You need a tailnet with MagicDNS and HTTPS certificates enabled, Ollama running 
 5. **Serve.** `go run ./cmd/tailkeep serve`, then open `https://tailkeep.<tailnet>.ts.net`. Paste text, press Check, and if the action is not `block`, ask a question about it. The audit page is at `/audit`.
 
 Flags, certificate timings and setup notes: [policy](docs/policy.md#command-line-flags-and-first-start), [troubleshooting](docs/troubleshooting.md#notes-from-the-quick-start), [`check`](docs/testing.md#the-check-command).
+
+## Reading the code
+
+Start with these functions; the rest of the code supports them.
+
+- [internal/web/web.go](internal/web/web.go) `ServeHTTP`: the web app's router, with the Host and cross-site checks. Its `scan` (POST /api/scans) is the whole path of one check.
+- [internal/web/answer.go](internal/web/answer.go) `answer`: POST /api/answers, the same path plus asking the local model; a block returns before the model.
+- [internal/hook/hook.go](internal/hook/hook.go) `handle`: the Aperture hook, from caller and end user to decision and response.
+- [internal/llmproxy/llmproxy.go](internal/llmproxy/llmproxy.go) `(*Proxy).ServeHTTP`: the model node, which checks the `llm` grant, the method and path and the size before it forwards.
+- [internal/policy/policy.go](internal/policy/policy.go) `Merge` and `Decide`: how grants combine into one policy, and how findings turn into an action.
+- [internal/detect/detect.go](internal/detect/detect.go) `Detect`: runs every detector over the text and returns the findings in order.
 
 ## Security model
 
