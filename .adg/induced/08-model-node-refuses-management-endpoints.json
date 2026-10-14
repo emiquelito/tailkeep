@@ -1,0 +1,8 @@
+{
+  "claim": "A granted caller can run a model but not manage it: Ollama's pull, delete, create, copy, push and tags endpoints and every path trick return 404 and never reach the backend.",
+  "baseline": "go test ./internal/llmproxy -count=1",
+  "inject": "go test ./internal/llmproxy -run 'TestManagementEndpointsAreRefused|TestPathTricksAreRefused|TestAllowlistIsExactMethodAndPath' -count=1",
+  "neutralize": "go test -tags adg_neutralize ./internal/llmproxy -run 'TestManagementEndpointsAreRefused' -count=1",
+  "timeout": 240,
+  "cwd": "."
+}

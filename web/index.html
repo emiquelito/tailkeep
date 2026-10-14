@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tailkeep</title>
+<style>
+  body { font: 20px/1.5 system-ui, sans-serif; margin: 0 auto; max-width: 1100px; padding: 24px; color: #1b1f24; background: #fff; }
+  nav a { margin-left: 16px; }
+  header { border: 2px solid #1b1f24; border-radius: 8px; padding: 12px 20px; margin: 16px 0; }
+  header dt { font-weight: bold; float: left; width: 9em; }
+  header dd { margin: 0 0 4px 9em; }
+  textarea { width: 100%; box-sizing: border-box; height: 12em; font: 18px/1.4 ui-monospace, monospace; padding: 8px; }
+  button { font-size: 22px; padding: 8px 28px; margin: 12px 0; cursor: pointer; }
+  #result { display: none; border: 2px solid #1b1f24; border-radius: 8px; padding: 12px 20px; }
+  .badge { display: inline-block; color: #fff; border-radius: 6px; padding: 2px 14px; font-weight: bold; }
+  .allow { background: #1a7f37; }
+  .redact { background: #b45f06; }
+  .reroute { background: #0b5cad; }
+  .block, .denied { background: #b42318; }
+  pre { white-space: pre-wrap; word-break: break-all; background: #f3f4f6; padding: 8px; border-radius: 6px; }
+  #problem { color: #b42318; font-weight: bold; }
+</style>
+</head>
+<body>
+<nav><strong>tailkeep</strong><a href="/audit">Audit</a></nav>
+<header>
+  <dl>
+    <dt>You</dt><dd id="who">{{.Who}}</dd>
+    <dt>Device</dt><dd id="device">{{.Device}}</dd>
+    <dt>Action</dt><dd id="action">{{.Action}}</dd>
+    <dt>On unknown</dt><dd id="on-unknown">{{.OnUnknown}}</dd>
+    <dt>Audit view</dt><dd id="view">{{.View}}</dd>
+  </dl>
+  <div id="problem">{{.Problem}}</div>
+</header>
+<textarea id="text" placeholder="Paste text to check" aria-label="Text to check"></textarea>
+<div><button id="check">Check</button></div>
+<div id="result">
+  <div><span id="decision" class="badge"></span> <span id="reason"></span></div>
+  <h3>Findings</h3>
+  <ul id="findings"></ul>
+  <div id="redacted-box">
+    <h3>Redacted text</h3>
+    <pre id="redacted"></pre>
+  </div>
+</div>
+<script>
+// Everything from the server is written with textContent.
+function el(id) { return document.getElementById(id); }
+
+function show(data) {
+  var badge = el('decision');
+  badge.textContent = data.action;
+  badge.className = 'badge ' + data.action;
+  el('reason').textContent = data.reason;
+  var list = el('findings');
+  list.textContent = '';
+  data.findings.forEach(function (f) {
+    var li = document.createElement('li');
+    li.textContent = f.detector + ': ' + f.preview;
+    list.appendChild(li);
+  });
+  if (data.findings.length === 0) {
+    var none = document.createElement('li');
+    none.textContent = 'none';
+    list.appendChild(none);
+  }
+  el('redacted-box').style.display = data.redacted_preview ? 'block' : 'none';
+  el('redacted').textContent = data.redacted_preview || '';
+  el('result').style.display = 'block';
+}
+
+function showError(message) {
+  show({ action: 'denied', reason: message, findings: [] });
+}
+
+el('check').addEventListener('click', function () {
+  fetch('/api/scans', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: el('text').value })
+  }).then(function (resp) {
+    return resp.json().then(function (body) {
+      if (resp.ok) { show(body); } else { showError(body.reason || 'request failed'); }
+    });
+  }).catch(function () { showError('request failed'); });
+});
+</script>
+</body>
+</html>

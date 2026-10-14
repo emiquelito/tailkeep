@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tailkeep audit</title>
+<style>
+  body { font: 20px/1.4 system-ui, sans-serif; margin: 0 auto; max-width: 1240px; padding: 24px; color: #1b1f24; background: #fff; }
+  nav a { margin-left: 16px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #d0d5dd; vertical-align: top; }
+  td { word-break: break-word; }
+  .badge { display: inline-block; color: #fff; border-radius: 6px; padding: 0 10px; font-weight: bold; }
+  .allow { background: #1a7f37; }
+  .redact { background: #b45f06; }
+  .reroute { background: #0b5cad; }
+  .block, .denied { background: #b42318; }
+  #status { color: #555; }
+</style>
+</head>
+<body>
+<nav><a href="/">Check text</a><strong style="margin-left:16px">Audit</strong></nav>
+<p id="status">Loading</p>
+<table>
+  <thead>
+    <tr><th>Time</th><th>Path</th><th>Caller</th><th>End user</th><th>Action</th><th>Class</th><th>Detectors</th><th>Reason</th><th>ms</th></tr>
+  </thead>
+  <tbody id="rows"></tbody>
+</table>
+<script>
+// Everything from the server is written with textContent.
+function cell(row, text, badgeClass) {
+  var td = document.createElement('td');
+  if (badgeClass) {
+    var span = document.createElement('span');
+    span.className = 'badge ' + badgeClass;
+    span.textContent = text;
+    td.appendChild(span);
+  } else {
+    td.textContent = text;
+  }
+  row.appendChild(td);
+}
+
+function render(data) {
+  var rows = document.getElementById('rows');
+  rows.textContent = '';
+  data.entries.forEach(function (e) {
+    var tr = document.createElement('tr');
+    cell(tr, new Date(e.time).toLocaleTimeString());
+    cell(tr, e.path);
+    cell(tr, e.caller);
+    cell(tr, e.end_user || '');
+    cell(tr, e.action, e.action);
+    cell(tr, e.class);
+    cell(tr, (e.detectors || []).join(', '));
+    cell(tr, e.reason);
+    cell(tr, String(e.duration_ms));
+    rows.appendChild(tr);
+  });
+  document.getElementById('status').textContent =
+    'Showing ' + (data.view === 'all' ? 'all entries' : 'your entries') +
+    ' since tailkeep started (' + data.entries.length + ')';
+}
+
+function poll() {
+  fetch('/api/audit-entries?limit=50')
+    .then(function (resp) { return resp.json(); })
+    .then(function (data) { if (data.entries) { render(data); } else { document.getElementById('status').textContent = data.reason || 'request failed'; } })
+    .catch(function () { document.getElementById('status').textContent = 'request failed'; });
+}
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>

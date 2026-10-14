@@ -1,0 +1,8 @@
+{
+  "claim": "A failed model check (timeout, transport error, bad status, invalid or incomplete answer) is recorded as unknown, never as clean or sensitive.",
+  "baseline": "go test ./internal/classify -run 'TestFailuresAreUnknown|TestTimeoutIsUnknown|TestTransportErrorIsUnknown' -count=1",
+  "inject": "go test ./internal/classify -run 'TestFailuresAreUnknown|TestTimeoutIsUnknown|TestTransportErrorIsUnknown' -count=1",
+  "neutralize": "go test -tags adg_neutralize ./internal/classify -run 'TestFailuresAreUnknown|TestTimeoutIsUnknown|TestTransportErrorIsUnknown' -count=1",
+  "timeout": 240,
+  "cwd": "."
+}

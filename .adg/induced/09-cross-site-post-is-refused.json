@@ -1,0 +1,8 @@
+{
+  "claim": "A cross-site POST to the web app is refused with 403: Sec-Fetch-Site other than same-origin and a foreign Origin are both rejected before any scan runs.",
+  "baseline": "go test ./internal/web -count=1",
+  "inject": "go test ./internal/web -run 'TestCrossSitePostIsRefused|TestHostMustBeTheGuardName' -count=1",
+  "neutralize": "go test -tags adg_neutralize ./internal/web -run 'TestCrossSitePostIsRefused' -count=1",
+  "timeout": 240,
+  "cwd": "."
+}

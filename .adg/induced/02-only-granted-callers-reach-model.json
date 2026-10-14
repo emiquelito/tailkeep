@@ -1,0 +1,8 @@
+{
+  "claim": "Only callers holding the llm capability reach the model node: people, a tagged device without the grant, an unknown caller and a caller with a malformed capability get 403 and never reach the backend.",
+  "baseline": "go test ./internal/llmproxy -count=1",
+  "inject": "go test ./internal/llmproxy -run 'TestOnlyGrantedCallersReachTheModelNode|TestMalformedCapabilityShowsFixedText|TestUngrantedCallerLearnsNothingAboutPaths' -count=1",
+  "neutralize": "go test -tags adg_neutralize ./internal/llmproxy -run 'TestOnlyGrantedCallersReachTheModelNode' -count=1",
+  "timeout": 240,
+  "cwd": "."
+}
