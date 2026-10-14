@@ -1,0 +1,8 @@
+{
+  "claim": "When several grants apply, the strictest protection wins: Merge of allow and block gives block, and a text with a fake AWS key is blocked.",
+  "baseline": "go test ./internal/policy -run 'TestMerge|TestDecide' -count=1",
+  "inject": "go test ./internal/policy -run 'TestStrictestGrantWins|TestAWSKeyUnderBlockAlwaysBlocks' -count=1",
+  "neutralize": "go test -tags adg_neutralize ./internal/policy -run 'TestStrictestGrantWins' -count=1",
+  "timeout": 240,
+  "cwd": "."
+}
