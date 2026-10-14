@@ -104,7 +104,7 @@ func (d *Doctor) startNodes(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fail(err)
 	}
-	if d.modelNode, err = startTLS(d.llm, NewHTTPServer(h, LLMTimeouts)); err != nil {
+	if d.modelNode, err = startTLS(d.llm, ":443", NewHTTPServer(h, LLMTimeouts)); err != nil {
 		return "", fail(err)
 	}
 	return "both up", nil

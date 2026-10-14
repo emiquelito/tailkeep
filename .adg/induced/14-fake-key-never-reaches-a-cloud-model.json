@@ -1,0 +1,8 @@
+{
+  "claim": "A fake AWS key never gets an allow or modify answer for a block or reroute user on a cloud provider: the hook answers block with status 451.",
+  "baseline": "go test ./internal/hook -count=1",
+  "inject": "go test ./internal/hook -run 'TestFakeKeyNeverReachesACloudModel' -count=1",
+  "neutralize": "env ADG_NEUTRALIZE=detector go test -tags adg_neutralize ./internal/hook -run 'TestFakeKeyNeverReachesACloudModel' -count=1",
+  "timeout": 240,
+  "cwd": "."
+}

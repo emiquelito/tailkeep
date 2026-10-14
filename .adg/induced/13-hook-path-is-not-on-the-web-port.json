@@ -1,0 +1,8 @@
+{
+  "claim": "The hook path does not exist on the web port: a request for it there gets 404 and never reaches the hook handler, while the hook port serves it.",
+  "baseline": "go test ./internal/server ./internal/web -count=1",
+  "inject": "go test ./internal/server ./internal/web -run 'TestHookListenerServesOnlyTheHookRoute|TestHookPathReturns404OnTheWebMux' -count=1",
+  "neutralize": "go test -tags adg_neutralize ./internal/server -run 'TestHookListenerServesOnlyTheHookRoute' -count=1",
+  "timeout": 240,
+  "cwd": "."
+}

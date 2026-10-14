@@ -1,0 +1,8 @@
+{
+  "claim": "Only a caller holding the hook capability gets an answer from the hook, even when the network layer is open: a person, a tagged device without the grant, an unknown caller and a caller with a malformed capability get 403 and an audit entry.",
+  "baseline": "go test ./internal/hook -count=1",
+  "inject": "go test ./internal/hook -run 'TestOnlyApertureCanCallTheHook' -count=1",
+  "neutralize": "env ADG_NEUTRALIZE=caller go test -tags adg_neutralize ./internal/hook -run 'TestOnlyApertureCanCallTheHook' -count=1",
+  "timeout": 240,
+  "cwd": "."
+}

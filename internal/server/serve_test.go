@@ -21,6 +21,7 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 
 	"github.com/emiquelito/tailkeep/internal/identity"
 )
@@ -33,6 +34,7 @@ type fakeLocal struct {
 
 	certErr, statusErr, whoisErr error
 	noSelf, noAddress, noNode    bool
+	withPeer                     bool // Status lists the caller as a peer
 
 	mu         sync.Mutex
 	certs      []string
@@ -66,7 +68,11 @@ func (f *fakeLocal) Status(context.Context) (*ipnstate.Status, error) {
 	case f.noAddress:
 		return &ipnstate.Status{Self: &ipnstate.PeerStatus{}}, nil
 	}
-	return &ipnstate.Status{Self: &ipnstate.PeerStatus{TailscaleIPs: []netip.Addr{netip.MustParseAddr("192.0.2.1")}}}, nil
+	st := &ipnstate.Status{Self: &ipnstate.PeerStatus{TailscaleIPs: []netip.Addr{netip.MustParseAddr("192.0.2.1")}}}
+	if f.withPeer {
+		st.Peer = map[key.NodePublic]*ipnstate.PeerStatus{key.NewNode().Public(): {ID: "nCaller", TailscaleIPs: []netip.Addr{netip.MustParseAddr("192.0.2.2")}}}
+	}
+	return st, nil
 }
 
 func (f *fakeLocal) CertPair(_ context.Context, domain string) ([]byte, []byte, error) {
@@ -131,6 +137,10 @@ func startServe(t *testing.T, guard, llm *fakeNode) (p Paths, stop func() error)
 }
 
 func startServeModel(t *testing.T, guard, llm *fakeNode, model string) (p Paths, stop func() error) {
+	return startServePort(t, guard, llm, model, 0)
+}
+
+func startServePort(t *testing.T, guard, llm *fakeNode, model string, hookPort int) (p Paths, stop func() error) {
 	t.Helper()
 	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{"data":[]}`) }))
 	t.Cleanup(ollama.Close)
@@ -141,7 +151,9 @@ func startServeModel(t *testing.T, guard, llm *fakeNode, model string) (p Paths,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- Serve(ctx, p, u, model, guard, llm, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
+	go func() {
+		done <- Serve(ctx, p, u, Config{Model: model, HookPort: hookPort}, guard, llm, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}()
 	t.Cleanup(cancel)
 	return p, func() error {
 		cancel()
@@ -202,9 +214,10 @@ func TestServeWiresEachMuxToItsOwnNode(t *testing.T) {
 	}
 }
 
-// Both listeners are TLS listeners on 443 and there are no others. Node has
-// no plain Listen method, so no code in the package can open one.
-func TestOnlyTLSListenersOn443AndNoPlainHTTP(t *testing.T) {
+// The guard listens on 443 and the hook port and nothing else; the model
+// node only on 443. All are TLS listeners. Node has no plain Listen method,
+// so no code in the package can open one.
+func TestOnlyTLSListenersAndTheHookPort(t *testing.T) {
 	guard := newFakeNode("tailkeep.example.test", "who@example.com", `{}`)
 	llm := newFakeNode("tailkeep-llm.example.test", "who@example.com", `{"llm":true}`)
 	_, stop := startServe(t, guard, llm)
@@ -213,9 +226,10 @@ func TestOnlyTLSListenersOn443AndNoPlainHTTP(t *testing.T) {
 	if err := stop(); err != nil {
 		t.Fatal(err)
 	}
-	for name, n := range map[string]*fakeNode{"guard": guard, "llm": llm} {
-		if !reflect.DeepEqual(n.listens, []string{"tcp :443"}) {
-			t.Errorf("%s listeners: %v", name, n.listens)
+	for name, want := range map[string][]string{"guard": {"tcp :443", "tcp :8443"}, "llm": {"tcp :443"}} {
+		n := map[string]*fakeNode{"guard": guard, "llm": llm}[name]
+		if !reflect.DeepEqual(n.listens, want) {
+			t.Errorf("%s listeners: %v, want %v", name, n.listens, want)
 		}
 	}
 	nodeType := reflect.TypeOf((*Node)(nil)).Elem()
@@ -263,7 +277,7 @@ func TestServeRefusesANodeWithoutAnHTTPSName(t *testing.T) {
 // Each server gets its own limits, with the actual values pinned here so
 // that raising one is a deliberate change.
 func TestServersGetTheirOwnLimits(t *testing.T) {
-	webServer, llmServer := newServers(http.NotFoundHandler(), http.NotFoundHandler())
+	webServer, llmServer, hookServer := newServers(http.NotFoundHandler(), http.NotFoundHandler(), http.NotFoundHandler())
 	type limits struct {
 		header, read, write, idle time.Duration
 		maxHeader                 int
@@ -276,6 +290,9 @@ func TestServersGetTheirOwnLimits(t *testing.T) {
 	}
 	if got, want := of(llmServer), (limits{10 * time.Second, time.Minute, 0, 2 * time.Minute, 32 << 10}); got != want {
 		t.Errorf("model node limits %+v, want %+v", got, want)
+	}
+	if got, want := of(hookServer), (limits{5 * time.Second, 30 * time.Second, 45 * time.Second, time.Minute, 32 << 10}); got != want {
+		t.Errorf("hook limits %+v, want %+v", got, want)
 	}
 }
 
@@ -388,7 +405,7 @@ func TestStopReportsARequestThatOutlastsTheWait(t *testing.T) {
 		close(entered)
 		<-release
 	})
-	r, err := startTLS(n, NewHTTPServer(handler, WebTimeouts))
+	r, err := startTLS(n, ":443", NewHTTPServer(handler, WebTimeouts))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +417,7 @@ func TestStopReportsARequestThatOutlastsTheWait(t *testing.T) {
 		t.Errorf("stop returned %v, want the deadline error", err)
 	}
 	// A server with nothing open stops cleanly.
-	idle, _ := startTLS(newFakeNode("tailkeep.example.test", "who@example.com", `{}`), NewHTTPServer(http.NotFoundHandler(), WebTimeouts))
+	idle, _ := startTLS(newFakeNode("tailkeep.example.test", "who@example.com", `{}`), ":443", NewHTTPServer(http.NotFoundHandler(), WebTimeouts))
 	if err := idle.stop(time.Second); err != nil {
 		t.Errorf("idle stop returned %v", err)
 	}
@@ -522,4 +539,108 @@ func TestRunPassesTheModelToServe(t *testing.T) {
 	if !strings.Contains(body, `"model":"run-model"`) {
 		t.Errorf("model call body %.120q", body)
 	}
+}
+
+// post sends a JSON POST to a listener with the given Host.
+func post(t *testing.T, addr, host, path, body string) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest("POST", "http://"+addr+path, strings.NewReader(body))
+	req.Host = host
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// The hook listener serves only the hook route, with the guard's own
+// resolver; the web listener does not serve the hook path. The caller here
+// holds the hook capability toward the guard, and its end user is not in the
+// fake peer list, so the answer is the not-visible block.
+func TestHookListenerServesOnlyTheHookRoute(t *testing.T) {
+	guard := newFakeNode("tailkeep.example.test", "aperture@example.com", `{"hook":true}`)
+	llm := newFakeNode("tailkeep-llm.example.test", "x@example.com", `{"llm":true}`)
+	_, stop := startServePort(t, guard, llm, "local-model", 9443)
+	webAddr, hookAddr := addrOf(t, guard), addrOf(t, guard)
+	addrOf(t, llm)
+	body := `{"metadata":{"login_name":"alice@example.com","stable_node_id":"nAlice"},"request_body":{"messages":[]}}`
+	if code, out := post(t, hookAddr, "any.example.test", "/aperture/pre-request", body); code != 200 || !strings.Contains(out, `"action":"block"`) || !strings.Contains(out, "not visible") {
+		t.Errorf("hook: %d %s", code, out)
+	}
+	if code, _ := post(t, hookAddr, "any.example.test", "/api/scans", `{"text":"x"}`); code != 404 {
+		t.Errorf("the hook mux served /api/scans: %d", code)
+	}
+	if code, _ := post(t, webAddr, "tailkeep.example.test", "/aperture/pre-request", body); code != 404 {
+		t.Errorf("the web mux served the hook path: %d", code)
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(guard.listens, []string{"tcp :443", "tcp :9443"}) {
+		t.Errorf("guard listeners: %v", guard.listens)
+	}
+}
+
+func TestServeAcceptsTheEdgeHookPorts(t *testing.T) {
+	for _, port := range []int{1, 65535} {
+		guard := newFakeNode("tailkeep.example.test", "who@example.com", `{}`)
+		llm := newFakeNode("tailkeep-llm.example.test", "who@example.com", `{"llm":true}`)
+		_, stop := startServePort(t, guard, llm, "", port)
+		addrOf(t, guard)
+		addrOf(t, guard)
+		addrOf(t, llm)
+		if err := stop(); err != nil {
+			t.Errorf("port %d: %v", port, err)
+		}
+	}
+}
+
+func TestServeRejectsAnInvalidHookPort(t *testing.T) {
+	for _, port := range []int{-1, 443, 65536} {
+		guard := newFakeNode("tailkeep.example.test", "who@example.com", `{}`)
+		llm := newFakeNode("tailkeep-llm.example.test", "who@example.com", `{"llm":true}`)
+		_, stop := startServePort(t, guard, llm, "", port)
+		if err := stop(); err == nil || !strings.Contains(err.Error(), "hook-port") {
+			t.Errorf("port %d: err = %v", port, err)
+		}
+		if len(guard.listens)+len(llm.listens) != 0 {
+			t.Errorf("port %d: listened", port)
+		}
+	}
+}
+
+// The hook gets the configured local provider and local model. The caller is
+// its own end user here (a visible peer holding the hook capability and a
+// reroute action).
+func TestHookGetsTheLocalProviderAndModel(t *testing.T) {
+	body := func(provider string) string {
+		return `{"metadata":{"login_name":"aperture@example.com","stable_node_id":"nCaller","provider":"` + provider + `"},` +
+			`"request_body":{"messages":[{"role":"user","content":"k AKIA` + `IOSFODNN7EXAMPLE"}]}}`
+	}
+	guard := newFakeNode("tailkeep.example.test", "aperture@example.com", `{"hook":true,"action":"reroute"}`)
+	guard.lc.withPeer = true
+	llm := newFakeNode("tailkeep-llm.example.test", "x@example.com", `{"llm":true}`)
+	p, _ := StatePaths(t.TempDir())
+	ollama := httptest.NewServer(http.NotFoundHandler())
+	defer ollama.Close()
+	u, _ := url.Parse(ollama.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, p, u, Config{Model: "run-model", LocalProvider: "mine"}, guard, llm, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}()
+	addrOf(t, guard)
+	hookAddr := addrOf(t, guard)
+	addrOf(t, llm)
+	if _, out := post(t, hookAddr, "x.example.test", "/aperture/pre-request", body("mine")); !strings.Contains(out, `"allow"`) {
+		t.Errorf("provider mine: %s", out)
+	}
+	if _, out := post(t, hookAddr, "x.example.test", "/aperture/pre-request", body("other")); !strings.Contains(out, "Send this request to run-model instead.") {
+		t.Errorf("other provider: %s", out)
+	}
+	cancel()
+	<-done
 }

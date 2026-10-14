@@ -103,13 +103,15 @@ func envOr(name, fallback string) string {
 // serve runs both nodes until SIGINT or SIGTERM.
 func serve(args []string, out, errw io.Writer) int {
 	fs, stateDir, ollama, model := commonFlags("serve", errw)
+	hookPort := fs.Int("hook-port", server.DefaultHookPort, "port of the Aperture hook listener")
+	provider := fs.String("local-provider", server.DefaultLocalProvider, "name of the self-hosted provider in Aperture; requests to it stay on the tailnet")
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
 		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	log := slog.New(slog.NewTextHandler(errw, nil))
-	if err := runServe(ctx, server.Config{StateDir: *stateDir, OllamaURL: *ollama, Model: *model}, out, log, startNodes); err != nil {
+	if err := runServe(ctx, server.Config{StateDir: *stateDir, OllamaURL: *ollama, Model: *model, HookPort: *hookPort, LocalProvider: *provider}, out, log, startNodes); err != nil {
 		fmt.Fprintln(errw, "tailkeep serve:", err)
 		return 1
 	}

@@ -148,6 +148,18 @@ func TestServeModelFlag(t *testing.T) {
 	}
 }
 
+func TestServeHookFlags(t *testing.T) {
+	got := useServe(t, nil)
+	runCmd("", "serve")
+	if got.HookPort != 8443 || got.LocalProvider != "local" {
+		t.Errorf("defaults %d %q", got.HookPort, got.LocalProvider)
+	}
+	runCmd("", "serve", "--hook-port", "9443", "--local-provider", "mine")
+	if got.HookPort != 9443 || got.LocalProvider != "mine" {
+		t.Errorf("flags %d %q", got.HookPort, got.LocalProvider)
+	}
+}
+
 func TestServeUsageAndFailureExitCodes(t *testing.T) {
 	useServe(t, errors.New("boom"))
 	if code, _, errs := runCmd("", "serve"); code != 1 || !strings.Contains(errs, "boom") {

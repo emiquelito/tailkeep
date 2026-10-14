@@ -13,6 +13,7 @@ import (
 
 	"github.com/emiquelito/tailkeep/internal/audit"
 	"github.com/emiquelito/tailkeep/internal/classify"
+	"github.com/emiquelito/tailkeep/internal/hook"
 	"github.com/emiquelito/tailkeep/internal/identity"
 	"github.com/emiquelito/tailkeep/internal/llmproxy"
 	"github.com/emiquelito/tailkeep/internal/web"
@@ -39,7 +40,7 @@ func Run(ctx context.Context, cfg Config, out io.Writer, log *slog.Logger, start
 	}
 	defer guard.Close()
 	defer llm.Close()
-	return Serve(ctx, p, ollama, cfg.Model, guard, llm, log)
+	return Serve(ctx, p, ollama, cfg, guard, llm, log)
 }
 
 // Serve wires the handlers to the two nodes and runs until ctx is cancelled
@@ -48,7 +49,11 @@ func Run(ctx context.Context, cfg Config, out io.Writer, log *slog.Logger, start
 // toward that node. The classifier and the answerer reach the model node by
 // its MagicDNS name, with the guard's own client, so every call goes over the
 // tailnet and the model node checks it.
-func Serve(ctx context.Context, p Paths, ollama *url.URL, model string, guard, llm Node, log *slog.Logger) error {
+func Serve(ctx context.Context, p Paths, ollama *url.URL, cfg Config, guard, llm Node, log *slog.Logger) error {
+	hookPort := cmp.Or(cfg.HookPort, DefaultHookPort)
+	if hookPort < 1 || hookPort > 65535 || hookPort == 443 {
+		return fmt.Errorf("invalid --hook-port %d (1-65535, not 443)", hookPort)
+	}
 	auditLog, err := audit.Open(p.Audit, log)
 	if err != nil {
 		return err
@@ -67,16 +72,17 @@ func Serve(ctx context.Context, p Paths, ollama *url.URL, model string, guard, l
 	if err != nil {
 		return err
 	}
-	model = cmp.Or(model, classify.DefaultModel)
+	model := cmp.Or(cfg.Model, classify.DefaultModel)
 	modelNode := "https://" + llmHost
+	resolver := identity.NewTSNetResolver(guardLocal, log)
+	classifier := classify.NewOllama(classify.Config{BaseURL: modelNode, HTTPClient: guard.HTTPClient(), Model: model})
 	webHandler, err := web.New(web.Config{
-		GuardHost: host,
-		Resolver:  identity.NewTSNetResolver(guardLocal, log),
-		Detector:  web.BuiltinDetector{},
-		Classifier: classify.NewOllama(classify.Config{
-			BaseURL: modelNode, HTTPClient: guard.HTTPClient(), Model: model}),
-		Answerer: web.ChatAnswerer{BaseURL: modelNode, Client: guard.HTTPClient(), Model: model},
-		Audit:    auditLog,
+		GuardHost:  host,
+		Resolver:   resolver,
+		Detector:   web.BuiltinDetector{},
+		Classifier: classifier,
+		Answerer:   web.ChatAnswerer{BaseURL: modelNode, Client: guard.HTTPClient(), Model: model},
+		Audit:      auditLog,
 	})
 	if err != nil {
 		return err
@@ -97,17 +103,24 @@ func Serve(ctx context.Context, p Paths, ollama *url.URL, model string, guard, l
 		log.Info("certificate ready", "name", name, "took", time.Since(start).Round(time.Millisecond))
 	}
 
-	// The Aperture hook will be added here: a third listener on the guard,
-	// ListenTLS(":8443") with its own mux, so the hook route is never on the
-	// web mux. It is not added yet, and the guard has no plain-HTTP listener.
-	webServer, llmServer := newServers(webHandler, llmHandler)
-	webSrv, err := startTLS(guard, webServer)
+	// The hook has its own port and its own mux, so the hook route is never
+	// on the web mux. The guard has no plain-HTTP listener.
+	hookHandler := hook.Mux(hook.Config{Resolver: resolver, Classifier: classifier, Audit: auditLog,
+		LocalProvider: cfg.LocalProvider, LocalModel: model})
+	webServer, llmServer, hookServer := newServers(webPortHandler(webHandler, hookHandler), llmHandler, hookHandler)
+	webSrv, err := startTLS(guard, ":443", webServer)
 	if err != nil {
 		return err
 	}
-	llmSrv, err := startTLS(llm, llmServer)
+	hookSrv, err := startTLS(guard, fmt.Sprintf(":%d", hookPort), hookServer)
 	if err != nil {
 		webSrv.stop(shutdownTimeout)
+		return err
+	}
+	llmSrv, err := startTLS(llm, ":443", llmServer)
+	if err != nil {
+		webSrv.stop(shutdownTimeout)
+		hookSrv.stop(shutdownTimeout)
 		return err
 	}
 	log.Info("tailkeep is serving", "guard", host)
@@ -117,9 +130,10 @@ func Serve(ctx context.Context, p Paths, ollama *url.URL, model string, guard, l
 	case <-ctx.Done():
 		log.Info("shutting down")
 	case failure = <-webSrv.done:
+	case failure = <-hookSrv.done:
 	case failure = <-llmSrv.done:
 	}
-	return errors.Join(ignoreClosed(failure), webSrv.stop(shutdownTimeout), llmSrv.stop(shutdownTimeout))
+	return errors.Join(ignoreClosed(failure), webSrv.stop(shutdownTimeout), hookSrv.stop(shutdownTimeout), llmSrv.stop(shutdownTimeout))
 }
 
 // modelHandler is the model node's handler. It identifies callers with the
@@ -132,10 +146,16 @@ func modelHandler(llm Node, ollama *url.URL, auditLog *audit.Log, log *slog.Logg
 	return llmproxy.New(identity.NewTSNetResolver(local, log), auditLog, ollama), nil
 }
 
+// webPortHandler is the handler of the web port: the web app and nothing
+// else. It is a variable only so the induced-failure build can add the hook
+// route to it.
+var webPortHandler = func(web, _ http.Handler) http.Handler { return web }
+
 // newServers pairs each handler with its own limits: short ones for the
-// web app, long read and no write limit for the model node.
-func newServers(web, llm http.Handler) (webServer, llmServer *http.Server) {
-	return NewHTTPServer(web, WebTimeouts), NewHTTPServer(llm, LLMTimeouts)
+// web app, a body-sized read for the hook, long read and no write limit for
+// the model node.
+func newServers(web, llm, hook http.Handler) (webServer, llmServer, hookServer *http.Server) {
+	return NewHTTPServer(web, WebTimeouts), NewHTTPServer(llm, LLMTimeouts), NewHTTPServer(hook, HookTimeouts)
 }
 
 // warmCert fetches the node's certificate, or finds it already cached, and
@@ -161,11 +181,11 @@ type running struct {
 	done chan error // receives the result of Serve
 }
 
-// startTLS serves srv on :443 of the node.
-func startTLS(n Node, srv *http.Server) (*running, error) {
-	ln, err := n.ListenTLS("tcp", ":443")
+// startTLS serves srv on addr (such as ":443") of the node.
+func startTLS(n Node, addr string, srv *http.Server) (*running, error) {
+	ln, err := n.ListenTLS("tcp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("listen on :443: %w", err)
+		return nil, fmt.Errorf("listen on %s: %w", addr, err)
 	}
 	r := &running{srv: srv, done: make(chan error, 1)}
 	go func() { r.done <- srv.Serve(ln) }()

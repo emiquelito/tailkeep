@@ -36,7 +36,19 @@ type Config struct {
 	StateDir  string // empty means DefaultStateDir
 	OllamaURL string
 	Model     string // the local model; empty means classify.DefaultModel
+
+	// HookPort is the port of the Aperture hook listener on the guard; 0
+	// means DefaultHookPort. LocalProvider is the name of the self-hosted
+	// provider in Aperture; empty means DefaultLocalProvider.
+	HookPort      int
+	LocalProvider string
 }
+
+// Defaults for the hook listener and the Aperture provider name.
+const (
+	DefaultHookPort      = 8443
+	DefaultLocalProvider = "local"
+)
 
 // Paths are the three places tailkeep keeps state. The sub-directory names
 // are constants, so the only path an operator chooses is the state
@@ -146,6 +158,20 @@ var LLMTimeouts = Timeouts{
 	Read:           time.Minute,
 	Write:          0,
 	Idle:           2 * time.Minute,
+	MaxHeaderBytes: 32 << 10,
+}
+
+// HookTimeouts are for the hook listener. Aperture gives up on a hook after
+// its own timeout (0.5 to 2 s recommended, 5 s by default), so these only
+// bound a stuck peer. They still let a 10 MB body arrive over a slow link
+// (30 s is about 350 KB/s). The write limit is longer than the read limit
+// because net/http counts it from the end of the headers, so it covers the
+// body read, the scan and the answer.
+var HookTimeouts = Timeouts{
+	ReadHeader:     5 * time.Second,
+	Read:           30 * time.Second,
+	Write:          45 * time.Second,
+	Idle:           time.Minute,
 	MaxHeaderBytes: 32 << 10,
 }
 
