@@ -27,3 +27,12 @@ aperture.local.*
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Build, test and editor output
+*.out
+*.test
+*.prof
+*.cover
+.idea/
+.vscode/
+*.swp

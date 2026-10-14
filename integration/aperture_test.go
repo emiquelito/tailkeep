@@ -74,14 +74,14 @@ func requireAnswered(t *testing.T, r reply) {
 
 // The fake key sent to the cloud model is blocked with
 // 451 for everyone; alice's message says to use the local model instead.
-func TestStep6And7CloudKeyBlocked(t *testing.T) {
+func TestCloudKeyBlocked(t *testing.T) {
 	s := setting(t, "APERTURE", "EXPECT", "CLOUD_MODEL", "LOCAL_MODEL")
 	requireBlock(t, s, complete(t, s, chat(s["CLOUD_MODEL"], user("Check this config: "+sensitiveText()))))
 }
 
 // The same request with the local model. Alice's reroute policy
 // allows it and the local model answers; block policies still block.
-func TestStep6aLocalModel(t *testing.T) {
+func TestLocalModel(t *testing.T) {
 	s := setting(t, "APERTURE", "EXPECT", "CLOUD_MODEL", "LOCAL_MODEL")
 	r := complete(t, s, chat(s["LOCAL_MODEL"], user("Reply with the single word OK. Text: "+sensitiveText())))
 	if s["EXPECT"] == "alice" {
@@ -92,7 +92,7 @@ func TestStep6aLocalModel(t *testing.T) {
 }
 
 // A prompt with nothing sensitive reaches the cloud model.
-func TestStep8CleanAllowed(t *testing.T) {
+func TestCleanPromptAllowed(t *testing.T) {
 	s := setting(t, "APERTURE", "CLOUD_MODEL")
 	requireAnswered(t, complete(t, s, chat(s["CLOUD_MODEL"], user("Reply with the single word OK."))))
 }
@@ -100,7 +100,7 @@ func TestStep8CleanAllowed(t *testing.T) {
 // The key only in an earlier tool result. Blocked for all three
 // identities; alice's message carries the guidance. For ci-agent the audit
 // entry names a tag, not a person.
-func TestStep8bAgentToolResult(t *testing.T) {
+func TestToolResultKeyBlocked(t *testing.T) {
 	s := setting(t, "APERTURE", "EXPECT", "CLOUD_MODEL", "LOCAL_MODEL")
 	requireBlock(t, s, complete(t, s, agentBody(s["CLOUD_MODEL"])))
 	if s["EXPECT"] != "ci-agent" || getenv("GUARD") == "" {

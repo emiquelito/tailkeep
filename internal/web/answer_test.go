@@ -156,7 +156,8 @@ func TestClassificationIsSkippedWhenFindingsDecideOrCheckIsOff(t *testing.T) {
 	}
 }
 
-// The web path asks the model by default: a caller whose capability does not mention model_check is checked.
+// The web path asks the model by default: a caller whose capability does not
+// mention model_check is checked.
 func TestWebPathModelCheckDefaultIsOn(t *testing.T) {
 	r := newRig(t)
 	r.cls.res = classify.Result{Label: classify.Sensitive}

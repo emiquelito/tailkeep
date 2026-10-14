@@ -473,7 +473,7 @@ func TestTrackedFilesListsTheIndex(t *testing.T) {
 	}
 }
 
-// A finding never prints a file name that itself matches a rule.
+// a finding never prints a file name that itself matches a rule.
 func TestNamesThatMatchARuleAreNotPrinted(t *testing.T) {
 	ownerName := "zorp-" + "box"
 	awsName := "AKIA" + "IOSFODNN7EXAMPLE"
@@ -525,7 +525,7 @@ func TestIndexLabelCountsFromOne(t *testing.T) {
 	}
 }
 
-// The copyright exemption hides only the owner's name.
+// the copyright exemption hides only the owner's name.
 func TestCopyrightExemptionCoversOnlyTheName(t *testing.T) {
 	name := "Zorp " + "Quill"
 	cfg := Config{Private: []string{name, "zorp-" + "box"}}
@@ -547,7 +547,7 @@ func TestCopyrightExemptionCoversOnlyTheName(t *testing.T) {
 	}
 }
 
-// Any run of whitespace, underscore or hyphen between the two words.
+// any run of whitespace, underscore or hyphen between the two words.
 func TestPhraseSeparators(t *testing.T) {
 	runLineCases(t, Config{}, []lineCase{
 		{"two spaces", "take  " + "home", "banned-word"},
@@ -559,7 +559,7 @@ func TestPhraseSeparators(t *testing.T) {
 	})
 }
 
-// Invisible characters inside a word do not hide it.
+// invisible characters inside a word do not hide it.
 func TestInvisibleCharactersAreIgnored(t *testing.T) {
 	cfg := Config{Private: []string{"zorp-" + "box"}}
 	for _, r := range []rune{0x00AD, 0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF} {
@@ -577,7 +577,7 @@ func TestInvisibleCharactersAreIgnored(t *testing.T) {
 	}
 }
 
-// A file with a NUL byte is a finding, except under docs/media/.
+// a file with a NUL byte is a finding, except under docs/media/.
 func TestBinaryFilesAreFindingsExceptMedia(t *testing.T) {
 	found := plant(t, Config{}, map[string]string{
 		"img.bin":          "\x89PNG\x00\x00",
@@ -588,7 +588,7 @@ func TestBinaryFilesAreFindingsExceptMedia(t *testing.T) {
 	}
 }
 
-// Pin boundaries and exemptions.
+// pin boundaries and exemptions.
 func TestMediaPrefixOnlyAtTheStart(t *testing.T) {
 	found := plant(t, Config{}, map[string]string{"x/docs/media/a.md": "inter" + "view\n"})
 	if len(found) != 1 {

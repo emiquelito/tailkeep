@@ -88,7 +88,7 @@ func commonFlags(name string, errw io.Writer) (fs *flag.FlagSet, stateDir, ollam
 	fs = flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(errw)
 	stateDir = fs.String("state-dir", "", "where node state is kept (default: <user config dir>/tailkeep)")
-	ollama = fs.String("ollama-url", envOr("OLLAMA_URL", defaultOllamaURL), "address of Ollama (default: $OLLAMA_URL, else "+defaultOllamaURL+")")
+	ollama = fs.String("ollama-url", envOr("OLLAMA_URL", defaultOllamaURL), "address of Ollama, taken from $OLLAMA_URL when that is set")
 	model = fs.String("model", defaultModel, "the local model: classifier, answers and doctor checks")
 	return fs, stateDir, ollama, model
 }

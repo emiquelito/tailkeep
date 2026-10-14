@@ -350,3 +350,18 @@ func TestDoctorPullModelFlagReachesTheCheck(t *testing.T) {
 		t.Errorf("pulled %v, starts %d", pulled, *calls)
 	}
 }
+
+// Each flag's default appears once in the help text of serve and doctor.
+func TestHelpShowsEachDefaultOnce(t *testing.T) {
+	for _, sub := range []string{"serve", "doctor"} {
+		_, _, errs := runCmd("", sub, "-h")
+		for _, line := range strings.Split(errs, "\n") {
+			if n := strings.Count(line, "(default"); n > 1 {
+				t.Errorf("%s -h: %d defaults on one line: %q", sub, n, line)
+			}
+		}
+		if !strings.Contains(errs, "-ollama-url") {
+			t.Errorf("%s -h does not list -ollama-url: %q", sub, errs)
+		}
+	}
+}

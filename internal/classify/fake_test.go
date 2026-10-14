@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Fake is a Classifier for tests in other packages. It returns Result
+// Fake is a Classifier for tests in this package. It returns Result
 // after Delay. If the context ends first it returns an Unknown result.
 type Fake struct {
 	Result Result

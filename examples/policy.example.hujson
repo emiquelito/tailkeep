@@ -104,6 +104,51 @@
 			},
 		},
 
+		// More field examples, commented out. Remove the leading "//" and
+		// adjust the login to use one. The login must also be in the network
+		// grants above (the "ip" grant to tag:tailkeep) to connect at all.
+		//
+		// carol: sensitive text is let through. The detectors still run and
+		// the decision is audited, but nothing is blocked or changed.
+		// {
+		// 	"src": ["carol@example.com"],
+		// 	"dst": ["tag:tailkeep"],
+		// 	"app": {
+		// 		"github.com/emiquelito/tailkeep": [
+		// 			{"action": "allow"},
+		// 		],
+		// 	},
+		// },
+		//
+		// dave: sensitive text is sent on with each finding replaced by
+		// [REDACTED:<detector>].
+		// {
+		// 	"src": ["dave@example.com"],
+		// 	"dst": ["tag:tailkeep"],
+		// 	"app": {
+		// 		"github.com/emiquelito/tailkeep": [
+		// 			{"action": "redact"},
+		// 		],
+		// 	},
+		// },
+		//
+		// erin: on_unknown decides what happens when the local model cannot
+		// give an answer ("block", the default, or "allow"). model_check
+		// asks the local model to classify the text as well as the
+		// detectors; it is on by default for the web app and off for the
+		// hook path. If another grant also applies, its on_unknown "block"
+		// wins over "allow", and a model_check of true from any grant wins
+		// over false.
+		// {
+		// 	"src": ["erin@example.com"],
+		// 	"dst": ["tag:tailkeep"],
+		// 	"app": {
+		// 		"github.com/emiquelito/tailkeep": [
+		// 			{"action": "reroute", "on_unknown": "allow", "model_check": true},
+		// 		],
+		// 	},
+		// },
+
 		// Aperture may call the hook on the guard. This grant sets only
 		// "hook", so it takes no position on action or the other protection
 		// fields.

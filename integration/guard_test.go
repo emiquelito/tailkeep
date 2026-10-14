@@ -15,7 +15,7 @@ import (
 
 // The app page shows who this device is and the policy that
 // applies, and the audit endpoint answers.
-func TestStep1Identity(t *testing.T) {
+func TestIdentityPage(t *testing.T) {
 	s := setting(t, "GUARD", "EXPECT")
 	page := must(t, "GET", s["GUARD"]+"/", nil)
 	expectStatus(t, page, http.StatusOK)
@@ -44,7 +44,7 @@ func TestStep1Identity(t *testing.T) {
 }
 
 // The same text gets the action of the caller's policy.
-func TestStep2And3Scan(t *testing.T) {
+func TestScanFollowsCallerPolicy(t *testing.T) {
 	s := setting(t, "GUARD", "EXPECT")
 	scan := func(text string) (action string, findings []struct{ Detector, Preview string }, class string) {
 		r := must(t, "POST", s["GUARD"]+"/api/scans", jsonBody(map[string]string{"text": text}))
@@ -76,10 +76,10 @@ func TestStep2And3Scan(t *testing.T) {
 	}
 }
 
-// Alice's reroute policy lets the local model answer; a
+// Ask: alice's reroute policy lets the local model answer; a
 // block policy (bob, ci-agent) refuses before any model sees the text. The
 // question asks for a number so the model has no reason to repeat the key.
-func TestStep2Ask(t *testing.T) {
+func TestAskFollowsCallerPolicy(t *testing.T) {
 	s := setting(t, "GUARD", "EXPECT")
 	body := jsonBody(map[string]string{
 		"text": sensitiveText(), "question": "How many lines does this text have? Answer with a number only.",
@@ -110,7 +110,7 @@ func TestStep2Ask(t *testing.T) {
 // node, and the refusal names the device. The caller check runs before the
 // path check, so a management path such as /api/pull is also a 403 for such
 // a caller (only a caller that does hold llm would get a 404 there).
-func TestStep4ModelNodeRefusesCaller(t *testing.T) {
+func TestModelNodeRefusesCallerWithoutLLM(t *testing.T) {
 	s := setting(t, "LLM", "EXPECT")
 	r := must(t, "GET", s["LLM"]+"/v1/models", nil)
 	expectStatus(t, r, http.StatusForbidden)
@@ -129,7 +129,7 @@ func TestStep4ModelNodeRefusesCaller(t *testing.T) {
 // The hook is on its own port (network layer) and its handler
 // checks the caller too (application layer). The test says which layer
 // stopped this device.
-func TestStep4bHookLayers(t *testing.T) {
+func TestHookLayers(t *testing.T) {
 	s := setting(t, "GUARD")
 	empty := jsonBody(map[string]string{})
 

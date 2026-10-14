@@ -62,7 +62,7 @@ func needPropagation(t *testing.T) {
 }
 
 // The guard's scan action for the fake key, polled.
-func TestStep9PropagationScan(t *testing.T) {
+func TestGrantPropagationScan(t *testing.T) {
 	needPropagation(t)
 	s := setting(t, "GUARD")
 	watch(t, "web scan action", func() (string, error) {
@@ -81,7 +81,7 @@ func TestStep9PropagationScan(t *testing.T) {
 // The status Aperture gives the fake key sent to the cloud model, polled: it
 // must start at 451 (blocked) and the test waits for 200 (the policy now redacts). The first request that gets
 // through is sent to the cloud model once, with the key redacted.
-func TestStep9PropagationAperture(t *testing.T) {
+func TestGrantPropagationAperture(t *testing.T) {
 	needPropagation(t)
 	s := setting(t, "APERTURE", "CLOUD_MODEL")
 	body := chat(s["CLOUD_MODEL"], user("Check: "+sensitiveText()))

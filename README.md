@@ -2,7 +2,7 @@
 
 tailkeep is a small Go program that checks text for secrets and sensitive content before it reaches a cloud model, and uses the caller's Tailscale identity to decide what happens next.
 
-It joins your tailnet as two nodes. The guard (`tailkeep`) finds sensitive content and applies the policy of whoever is asking. The model node (`tailkeep-llm`) is a reverse proxy in front of a local Ollama, reachable only by callers the policy allows. People use the guard through a web app. Aperture can call it as a `pre_request` hook.
+Built with tsnet, Tailscale's Go library for embedding a tailnet node in a program, it joins your tailnet as two nodes. The guard (`tailkeep`) finds sensitive content and applies the policy of whoever is asking. The model node (`tailkeep-llm`) is a reverse proxy in front of a local Ollama, reachable only by callers the policy allows. People use the guard through a web app. Aperture can call it as a `pre_request` hook.
 
 Users never log in and never hold a key. The tailnet tells tailkeep who is calling, and an app capability in the policy file says how that caller is to be treated.
 
@@ -52,6 +52,17 @@ A note on `block`. "Block" means the text is not sent to any model for an answer
 
 Running two nodes from one program gives each its own address, tags and grants. That lets the policy admit Aperture to the model node and nobody else, and lets the guard call the model node as an ordinary peer.
 
+## Reading the code
+
+Start with these functions; the rest of the code supports them.
+
+- [internal/web/web.go](internal/web/web.go) `ServeHTTP`: the web app's router, with the Host and cross-site checks. Its `scan` (POST /api/scans) is the whole path of one check.
+- [internal/web/answer.go](internal/web/answer.go) `answer`: POST /api/answers, the same path plus asking the local model; a block returns before the model.
+- [internal/hook/hook.go](internal/hook/hook.go) `handle`: the Aperture hook, from caller and end user to decision and response.
+- [internal/llmproxy/llmproxy.go](internal/llmproxy/llmproxy.go) `(*Proxy).ServeHTTP`: the model node, which checks the `llm` grant, the method and path and the size before it forwards.
+- [internal/policy/policy.go](internal/policy/policy.go) `Merge` and `Decide`: how grants combine into one policy, and how findings turn into an action.
+- [internal/detect/detect.go](internal/detect/detect.go) `Detect`: runs every detector over the text and returns the findings in order.
+
 ## Quick start
 
 You need Go 1.27.1 or later (the version `tailscale.com` requires). Nothing else is needed for the first part.
@@ -88,7 +99,7 @@ You need a tailnet with MagicDNS and HTTPS certificates enabled, Ollama running 
    export TS_AUTHKEY_GUARD=<key tagged tag:tailkeep>
    export TS_AUTHKEY_LLM=<key tagged tag:tailkeep-llm>
    ```
-   After the first start the state directory holds the node keys and the variables are no longer needed. Both nodes are persistent, so their names stay stable. Before the first start, check that no machine called `tailkeep` or `tailkeep-llm` exists in your tailnet: the names are expected to appear in public certificate transparency logs once certificates are issued (this follows from how public certificates work; not checked here).
+   After the first start the state directory holds the node keys and the variables are no longer needed. Both nodes are persistent, so their names stay stable. Before the first start, check that no machine called `tailkeep` or `tailkeep-llm` exists in your tailnet: the names are expected to appear in public certificate transparency logs once certificates are issued.
 3. **Ollama and the model.** Install Ollama and pull `granite4.1:3b`. `tailkeep doctor` tells you which step is missing (below).
 4. **Doctor.**
    ```sh
@@ -225,7 +236,7 @@ The model check looks for sensitive content that patterns cannot recognize: cust
 - **`unknown` is its own result.** A timeout (20 seconds by default), a transport error, a bad status or an answer that cannot be parsed gives `unknown`, with a cause in the reason. It is never recorded as `clean` and never as `sensitive`. The policy field `on_unknown` decides what `unknown` does, and defaults to `block`.
 - **`sensitive` with no spans.** If only the model flagged the text there is nothing to redact, so a `redact` action becomes `block` with the reason "flagged by the local model; nothing specific to redact".
 - **The model's own explanation is dropped.** Its free-text reason can repeat the text it read, so it goes into no response, no audit entry and no message. Only the label and the fixed category names are kept.
-- **It runs only when needed.** The web app asks the model only when the caller's policy has `model_check` on and no detector found anything. On the Aperture path the check is off by default, because a call took about 2.8 to 5.3 seconds warm through the model node in an earlier test (8.4 s cold; the run through the model node in [Why this model](#why-this-model) had a median of 1.11 s per sample and about 6.8 s on the first call), while Aperture recommends a hook timeout of 0.5 to 2 seconds.
+- **It runs only when needed.** The web app asks the model only when the caller's policy has `model_check` on and no detector found anything. On the Aperture path the check is off by default: a classifier call through the model node takes a median of about 1.1 s, about 7 s on the first call, too slow to fit reliably in Aperture's recommended 0.5 to 2 s hook timeout.
 
 The classifier and the answers are served by the local model through the model node, never directly from `127.0.0.1`.
 
@@ -254,7 +265,7 @@ Aperture can call tailkeep's hook before it forwards a request. The full setup (
 How the hook behaves:
 
 - **Endpoint.** `POST /aperture/pre-request` on its own port, 8443 by default (`--hook-port`), served by a separate listener that has only this route. On port 443 a JSON `POST` to that path gets `404` (a request that fails the Host or cross-site checks gets `403` first).
-- **Callers.** Only a caller holding the `hook` capability gets an answer; anyone else gets `403` naming the caller, and the refusal is audited. Aperture's `apikey` is not needed: tailkeep ignores whatever value is sent and identifies Aperture through WhoIs (that Aperture accepts a hook without a key is not tested live).
+- **Callers.** Only a caller holding the `hook` capability gets an answer; anyone else gets `403` naming the caller, and the refusal is audited. Aperture's `apikey` is not needed: tailkeep ignores whatever value is sent and identifies Aperture through WhoIs.
 - **End user.** The hook payload carries the end user's `stable_node_id` and `login_name`. tailkeep looks the device up by that ID and reads the policy that device holds toward the guard. It checks that the device's login (or, for a tagged device, its tags sorted and joined with commas, which is what Aperture's documentation says it sends; confirmed live: a tagged device's hook audit entry names its tag as the end user) matches `login_name`. A mismatch is blocked and audited as an integrity error.
 - **Visibility.** The guard can only look up devices it can see, which depends on network grants. Every person whose Aperture traffic goes through the hook needs at least the grant from their devices to `tag:tailkeep:443`. A device the guard cannot see is blocked with the reason "device not visible to tailkeep".
 - **What is scanned.** The whole `request_body`, not only the last message: every string value in the JSON is scanned, so a secret in a tool-result message (for example a `.env` file an agent read) is caught even though nobody typed it. This works the same for OpenAI chat, OpenAI Responses and Anthropic message bodies. Numbers are written back exactly as received. The `user_message` field is scanned too. A `redact` action whose only finding is in `user_message` becomes `block`, because only `request_body` is rewritten.
@@ -276,22 +287,41 @@ Known limits on this path:
 - Strings are scanned as written. A secret that exists only base64-encoded is not found.
 - Large binary payloads are skipped: a `data:` URL with a base64 payload, and the `data` of a base64 source block (image or document blocks), when the payload is 1 KB or more and decodes to non-text bytes. A secret inside an image or an uploaded file is not detected.
 - JSON object keys are not scanned and not redacted. A secret placed in a key is not found.
-- The hook uses the model check only if a grant sets `model_check` to `true`. Model calls took 2.8 to 5.3 s warm through the model node in testing, so with a short hook timeout leave it off here.
+- The hook uses the model check only if a grant sets `model_check` to `true`. A model call through the model node takes a median of about 1.1 s and about 7 s on the first call, so with a short hook timeout leave it off here.
 - A `redact` rewrite changes earlier messages in the body, which can reduce the provider's prompt-cache hits (per Aperture's documentation; not measured here).
 - Devices outside the tailnet that reach Aperture through a bridge are not supported, because the stable ID would belong to the bridge (a design limit; not tested).
 
 ## Security model
 
-- **Protection in two places on the hook.** First, the tailnet policy opens port 8443 on `tag:tailkeep` to `tag:aperture` alone, so no other device can open a connection to it. Second, the handler looks up the caller with WhoIs and refuses anyone without the `hook` capability, whatever the network let through. A person is stopped by either one on its own, and a mistake in one is covered by the other. The grant is about reachability; the capability is about permission. The model node is built the same way: port 443 on `tag:tailkeep-llm`, then the `llm` capability.
+- **Protection in two places on the hook.** First, the tailnet policy opens port 8443 on `tag:tailkeep` to `tag:aperture` alone, so no other device can open a connection to it. Second, the handler looks up the caller with WhoIs and refuses anyone without the `hook` capability, whatever the network let through. A person is stopped by either one on its own, and a mistake in one is covered by the other. The grant is about reachability; the capability is about permission. The model node is built the same way: port 443 on `tag:tailkeep-llm`, then the `llm` capability. (See checks 1, 9 and 10 below.)
 - **No API keys.** Users and Aperture do not present a key. The only secrets are the two tagged auth keys, which are read from environment variables on the first start of each node and never logged.
-- **Deny by default.** No capability means `block`. An unknown caller, a lookup error or a malformed capability on the hook or model node is a `403`. On the web app a caller who cannot be identified gets `403` on scans and answers, and a caller with no grant gets `403` on answers and a detector-only scan.
-- **Strictest wins.** When grants overlap, protection fields take the strictest value and permissions add up, so a new grant cannot weaken protection by accident.
-- **Unknown stays unknown.** A model failure is recorded as `unknown`, and the policy field `on_unknown` decides.
-- **The model node serves inference only.** It forwards `POST /v1/chat/completions`, `GET /v1/models` and `POST /api/chat`. Every other path, including Ollama's pull, delete, create, copy and push, is `404`, so a granted caller can run the model but never change which models exist. The caller check runs first, so a caller without the `llm` capability learns nothing about which paths exist. Ollama listens on `127.0.0.1` only.
+- **Deny by default.** No capability means `block`. An unknown caller, a lookup error or a malformed capability on the hook or model node is a `403`. On the web app a caller who cannot be identified gets `403` on scans and answers, and a caller with no grant gets `403` on answers and a detector-only scan. (See checks 1 and 9 below.)
+- **Strictest wins.** When grants overlap, protection fields take the strictest value and permissions add up, so a new grant cannot weaken protection by accident. (See check 3 below.)
+- **Unknown stays unknown.** A model failure is recorded as `unknown`, and the policy field `on_unknown` decides. (See check 2 below.)
+- **The model node serves inference only.** It forwards `POST /v1/chat/completions`, `GET /v1/models` and `POST /api/chat`. Every other path, including Ollama's pull, delete, create, copy and push, is `404`, so a granted caller can run the model but never change which models exist. The caller check runs first, so a caller without the `llm` capability learns nothing about which paths exist. Ollama listens on `127.0.0.1` only. (See check 5 below.)
 - **TLS only.** The guard has no plain-HTTP listener on any port.
-- **Secrets never logged.** An audit entry has no field that can hold scanned text, and a final pass redacts anything secret-like in strings that come from outside, such as device names. Previews are four characters at most. The audit file (`audit.jsonl` in the state directory) is created with mode 0600 in a 0700 folder, and an existing file with broader permissions is tightened to 0600 on Unix. Windows does not enforce Unix file modes, so there the state directory's own access rules apply. The audit page shows only entries since the process started; the file is never read back, so restarting `serve` gives a clean page.
+- **Secrets never logged.** An audit entry has no field that can hold scanned text, and a final pass redacts anything secret-like in strings that come from outside, such as device names. Previews are four characters at most. The audit file (`audit.jsonl` in the state directory) is created with mode 0600 in a 0700 folder, and an existing file with broader permissions is tightened to 0600 on Unix. Windows does not enforce Unix file modes, so there the state directory's own access rules apply. The audit page shows only entries since the process started; the file is never read back, so restarting `serve` gives a clean page. (See check 4 below for the redaction.)
 - **Why a device cannot claim a tag it was not given.** Tags come from the control plane: from `tagOwners` in the policy file and from the tagged auth key a device joins with. tailkeep takes tags from the WhoIs node and never from the user profile, which is a placeholder for tagged devices.
-- **Cross-site protection** on the web app: the `Host` and `Sec-Fetch-Site`/`Origin` checks described in [Policy reference](#policy-reference), a strict Content-Security-Policy on the pages, and no CORS headers.
+- **Cross-site protection** on the web app: the `Host` and `Sec-Fetch-Site`/`Origin` checks described in [Policy reference](#policy-reference), a strict Content-Security-Policy on the pages, and no CORS headers. (See check 6 below.)
+
+The checks below are proven by removing each protection and watching the named test fail, using agent-delivery-gates `induce`.
+
+| # | Claim | Test | Check it removes |
+|---|---|---|---|
+| 1 | Only callers with the `llm` capability reach the model node; everyone else gets `403` | [TestOnlyGrantedCallersReachTheModelNode](internal/llmproxy/llmproxy_test.go) | the caller check, so every caller is let in |
+| 2 | A failed model check is `unknown`, never `clean` or `sensitive` | [TestFailuresAreUnknown](internal/classify/ollama_test.go), [TestTimeoutIsUnknown](internal/classify/ollama_test.go), [TestTransportErrorIsUnknown](internal/classify/ollama_test.go) | the `unknown` result, so every failure is reported as `clean` |
+| 3 | With several grants the strictest protection wins | [TestStrictestGrantWins](internal/policy/policy_test.go) | the strictness order, reversed so the loosest action wins |
+| 4 | Secret-like strings from outside, such as device names, are redacted before they reach the audit log | [TestScrubRemovesSecretShapedStrings](internal/audit/audit_test.go) | the redaction of secret-like strings in audit entries |
+| 5 | A granted caller can run a model but not manage it (pull, delete, create, copy, push, tags) | [TestManagementEndpointsAreRefused](internal/llmproxy/llmproxy_test.go) | the path allowlist, so Ollama's management endpoints pass |
+| 6 | A cross-site `POST` to the web app is refused with `403` | [TestCrossSitePostIsRefused](internal/web/web_test.go) | the `Sec-Fetch-Site` and `Origin` checks |
+| 7 | The hygiene check finds banned words, credential-looking values, Tailscale addresses and names, and other emails | [TestPlantedFileTripsEveryRule](internal/hygiene/hygiene_test.go) | the rule list, emptied so nothing is found |
+| 8 | Text whose decision is `block` reaches no model | [TestBlockedAnswerReachesNoModel](internal/web/answer_test.go) | the stop on a `block` decision before the model is called |
+| 9 | Only a caller with the `hook` capability gets an answer from the hook | [TestOnlyApertureCanCallTheHook](internal/hook/hook_test.go) | the hook caller check, so every caller is let in |
+| 10 | The hook path does not exist on the web port | [TestHookListenerServesOnlyTheHookRoute](internal/server/serve_test.go) | the separation of the ports, so the hook route is also served on the web port |
+| 11 | A fake AWS key never gets `allow` or `modify` for a `block` or `reroute` user on a cloud provider | [TestFakeKeyNeverReachesACloudModel](internal/hook/hook_test.go) | the detectors, which then find nothing |
+| 12 | A secret only in a tool-result message is caught | [TestToolResultSecretIsCaught](internal/hook/hook_test.go) | the scan of the whole request body, leaving only `user_message` scanned |
+
+Claims with no induced-failure check: "No API keys", "TLS only" and "Why a device cannot claim a tag it was not given".
 
 Out of scope:
 
@@ -305,7 +335,7 @@ Out of scope:
 
 ## Related tools
 
-Several open source projects work on parts of this problem: Microsoft Presidio for personal data, LLM Guard for checks on prompts and replies, and secret scanners such as gitleaks. Each has a scope and a track record of its own and deserves its own evaluation. tailkeep's detectors are a short built-in list. The code has no plug-in mechanism for other engines today. The web package has a small detector interface for its own use, and support for another engine could be added later.
+Several open source projects work on parts of this problem: Microsoft Presidio for personal data, LLM Guard for checks on prompts and replies, and secret scanners such as gitleaks. Each has a scope and a track record of its own and deserves its own evaluation. tailkeep's detectors are a short built-in list. The code has no plug-in mechanism for other engines today.
 
 ## Testing
 
@@ -323,13 +353,7 @@ go test ./...
   ```
   They are not part of `go test ./...`. The classifier check is a separate integration test in `internal/classify`; it needs `TAILKEEP_CLASSIFY_URL` to point at an Ollama address (see [Why this model](#why-this-model)).
 - **Public-repository check.** `go test -tags hygiene ./...` scans every tracked file for banned words, credential-looking strings, Tailscale addresses, real `.ts.net` names, emails other than `@example.com`, and a private list of values that is never written in the repository. That list comes from the environment variable `TAILKEEP_HYGIENE_PRIVATE`; without it, that one rule is skipped and a notice says so. The list must contain the owner name exactly as the `LICENSE` copyright line spells it, or that line is reported. Findings print the file, line and rule, never the matched text. If a file's own name is the problem, it prints `<tracked file #N>`; resolve it with `git ls-files | sed -n Np`, replacing `N`. The check cannot see commit metadata, git history, images and video, binary or UTF-16 files, look-alike characters, or files that are not tracked or staged yet.
-- **Mutation testing** uses agentgates. A fresh clone needs the Go grammar first (`npx --no-install adg lang add go`):
-  ```sh
-  npx --no-install adg mutate --paths internal/detect/detect.go internal/policy/policy.go --command "go test ./..." --max 200
-  ```
-  It only changes operators, not regular expressions or constants, so some changes were made by hand in a scratch copy. Survivors without a test are explained in [docs/gate-tally.md](docs/gate-tally.md).
-- **Induced-failure checks.** Each security claim has a spec in `.adg/induced/` with the claim, a passing baseline, and a command that removes the protection. `npx --no-install adg induce` runs the protection in place and again with it taken away, and reports a check that passes either way. The removal uses the test-only build tag `adg_neutralize` in `_test.go` files. A test checks that a normal build of `./cmd/tailkeep` contains no such code, so there is no switch that turns off identity checks or detection.
-- **Hooks for a fresh clone.** The pre-commit hook runs go vet, gofmt, the hygiene check, the tests, the prose scan and the tally check. `core.hooksPath` is local git configuration, so a fresh clone runs no hook until you set it:
+- **Commit checks.** Commits run the agent-delivery-gates checks (vet, gofmt, hygiene, tests and more; see [docs/gate-tally.md](docs/gate-tally.md)). A fresh clone runs no hook until you set `core.hooksPath` and run `npm ci`:
   ```sh
   git config core.hooksPath .githooks
   ```
@@ -345,25 +369,19 @@ Runs 1 and 2 went directly to the local Ollama. Run 3 went through the model nod
 |---|---|---|---|---|---|---|
 | 1 | first version | 15 of 20 | 0 | 5 | 5 of 10 | 1.46 s |
 | 2 | category names added | 17 of 20 | 0 | 3 | 7 of 10 | 1.35 s |
-| 3 (through the model node) | current | 17 of 20 | 0 | 3 | 7 of 10 | 1.11 s |
+| 3 (through the model node) | same as run 2 | 17 of 20 | 0 | 3 | 7 of 10 | 1.11 s |
 
 In run 2 the model missed the customer records, the internal infrastructure text and the injection sample. Recall on sensitive text is 7 of 10, so the model check misses things. It raised no false alarm on the 10 clean samples in either run, which is a small sample. By design the model check can only make a decision stricter, so a miss leaves the detectors' result in place; do not rely on it for completeness. The first (cold) call was slow: 7.05 s in run 1, 5.6 s in run 2 and about 6.8 s in run 3, while the model loads. The model is not fully deterministic at temperature 0, so treat single runs as indicative.
 
 **The injection sample** (a sensitive text that tells the classifier to answer "clean") was classified `clean` in all three runs. The model check can be talked out of a verdict by the text it reads. That is one reason it can only tighten a decision, and why the detectors, not the model, are the guarantee for credentials.
 
-Timing through the model node, from an earlier test on one machine with a model-node hop (guard to model node to Ollama, GPU, 4,096-token context, five runs per case): 2,000 clean characters took about 3.1 s warm; a text with a fake key took 4.3 to 5.3 s; the first call after load took 8.4 s. A fake key inside 2,000 characters was flagged in 4 of 5 runs and in 0 of 5 runs at 6,000 characters, which is why the limit is 2,000. That test ran before the classifier code was written, with a different prompt, so it says little about the current classifier; the 20-sample table above is the better guide.
+A fake key inside 2,000 characters was flagged in 4 of 5 runs in an earlier test and in 0 of 5 runs at 6,000 characters, which is why the limit is 2,000.
 
 ## Troubleshooting
 
-**`curl` from WSL goes out as the wrong identity.** If `tailscaled` runs inside the same WSL distribution and joined as a tagged device (for the `tag:ci-agent` role), every `curl` from a WSL shell to a tailnet address goes out as that tag, not as you. Run your own commands from the device that is signed in as you (for example PowerShell on Windows), or from WSL before `tailscaled` is started there. If `tailscale up` in WSL joined with your login when you wanted the tag, run `tailscale logout` and join again with `tailscale up --auth-key=<tagged key>`. `tailscale whoami` shows who the device is (the author used client 1.104.1).
+**`ollama ps` does not show `100% GPU`.** `CUDA_VISIBLE_DEVICES` takes the GPU UUID from `nvidia-smi -L`. Otherwise the context may be too large for the card. See [Local model setup and context size](#local-model-setup-and-context-size). `ollama ps` lists a model only for a few minutes after its last use.
 
-**A command fails with a path or quoting error.** Check which shell a command is meant for. A Windows path such as `\\wsl.localhost\...` is mangled inside double quotes in WSL bash. Run Windows paths from PowerShell.
-
-**Ollama in WSL ignores your environment variables.** Variables exported in a shell do not reach an Ollama systemd service. Use `sudo systemctl edit ollama` to add an `[Service]` override with `Environment=` lines, then `sudo systemctl restart ollama`. Without systemd, run `ollama serve` in a terminal with the variables exported. `CUDA_VISIBLE_DEVICES` takes the GPU UUID from `nvidia-smi -L` run inside WSL, where numbering can differ from Windows.
-
-**`ollama ps` does not show `100% GPU`.** The context may be too large for the card. See [Local model setup and context size](#local-model-setup-and-context-size). `ollama ps` lists a model only for a few minutes after its last use.
-
-**Installing Ollama.** `tailkeep doctor` prints the route for your system. On Linux it is Ollama's install script from their download page. For Windows and macOS it prints the download page URLs for those systems, which follow the pattern of Ollama's download page and are to be confirmed. Ollama's download page (`https://ollama.com/download`) is the reference.
+**Installing Ollama.** `tailkeep doctor` prints the route for your system. On Linux it is Ollama's install script from their download page. For Windows and macOS it prints the download page URL for those systems: `https://ollama.com/download/windows` ("Download Ollama on Windows") and `https://ollama.com/download/mac` ("Download Ollama on macOS"). Ollama's download page (`https://ollama.com/download`) is the reference.
 
 **`doctor` or `serve` fails to start a node.** On the first start both `TS_AUTHKEY_GUARD` and `TS_AUTHKEY_LLM` must be set, to reusable, pre-approved, tagged keys. An ephemeral node is deleted when it stops, so a restart needs a new registration and a key that can be used again; a key created without "Reusable" fails the second start with "not valid". Also check that no machine with those names already exists.
 
@@ -402,7 +420,7 @@ These are ideas. None of them exists in the code.
 - Tailscale Services (`ListenService`) so several guard instances can share one name.
 - Device posture: a stricter action for unmanaged devices.
 - `tsidp` for identity in other tools.
-- Audit export to a file or a log pipeline.
+- Shipping the audit file to a log pipeline.
 
 ## License
 

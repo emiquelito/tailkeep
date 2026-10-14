@@ -38,8 +38,9 @@
 //	TAILKEEP_CLASSIFY_URL=https://tailkeep-llm.<tailnet>.ts.net \
 //	  go test -tags integration -run TestClassifierCheck -v ./internal/classify/
 //
-// and remove the grant afterwards. The step 4 test here expects a device
-// WITHOUT the llm capability, so run it before the grant or after removing it.
+// and remove the grant afterwards. TestModelNodeRefusesCallerWithoutLLM
+// expects a device WITHOUT the llm capability, so run it before the grant or
+// after removing it.
 package integration
 
 import (
