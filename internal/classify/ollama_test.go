@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"reflect"
 	"regexp"
 	"strings"
 	"syscall"
@@ -550,7 +551,23 @@ func TestOffListCategoriesAreDropped(t *testing.T) {
 	}
 }
 
+// oldResponseSchema is the schema text as it was before it was built from a
+// Go value. The new schema must mean exactly the same.
+const oldResponseSchema = `{
+  "type": "object",
+  "properties": {
+    "sensitive":  {"type": "boolean"},
+    "categories": {"type": "array", "items": {"type": "string", "enum": ["personal data","customer data","internal hostnames or infrastructure details","unreleased financials"]}},
+    "reason":     {"type": "string"}
+  },
+  "required": ["sensitive", "categories", "reason"]
+}`
+
 func TestSchemaPinsCategoryEnum(t *testing.T) {
+	raw := responseSchema()
+	if !json.Valid(raw) {
+		t.Fatalf("schema is not valid JSON: %s", raw)
+	}
 	var schema struct {
 		Properties struct {
 			Categories struct {
@@ -560,17 +577,34 @@ func TestSchemaPinsCategoryEnum(t *testing.T) {
 			} `json:"categories"`
 		} `json:"properties"`
 	}
-	if err := json.Unmarshal(responseSchema(), &schema); err != nil {
+	if err := json.Unmarshal(raw, &schema); err != nil {
 		t.Fatal(err)
 	}
 	enum := schema.Properties.Categories.Items.Enum
-	if len(enum) != 4 {
-		t.Fatalf("enum = %v", enum)
+	wantEnum := []string{"personal data", "customer data", "internal hostnames or infrastructure details", "unreleased financials"}
+	if !reflect.DeepEqual(enum, wantEnum) {
+		t.Fatalf("enum = %q, want %q", enum, wantEnum)
+	}
+	if !reflect.DeepEqual(enum, categories) {
+		t.Fatalf("enum = %q, categories = %q", enum, categories)
 	}
 	for _, name := range enum {
 		if !strings.Contains(systemPrompt, `"`+name+`"`) {
 			t.Errorf("prompt does not name category %q", name)
 		}
+	}
+}
+
+func TestSchemaMeansWhatItAlwaysMeant(t *testing.T) {
+	var got, want any
+	if err := json.Unmarshal(responseSchema(), &got); err != nil {
+		t.Fatalf("new schema: %v", err)
+	}
+	if err := json.Unmarshal([]byte(oldResponseSchema), &want); err != nil {
+		t.Fatalf("old schema: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("schema changed meaning:\n got  %s\n want %s", responseSchema(), oldResponseSchema)
 	}
 }
 
